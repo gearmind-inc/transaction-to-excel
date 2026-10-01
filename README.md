@@ -44,7 +44,9 @@ produces:
 | 名前 | A社 | B社 |
 | 金額 | 001 | 0 |
 
-The preview’s row labels are metadata, not extra CSV cells. Excluded rows/columns are omitted from the transpose; Undo restores the complete prior table. A transpose that would exceed 50 columns is refused with an explanation and retains the table. Repeated transpose applies the same rule to the current table; Undo is the exact way to reverse a change.
+Click Transpose again to return to the original orientation, with no additional rows or columns. The header-value column becomes the column headings again; generated headings return to preview row labels rather than becoming CSV cells. Edits to those headings remain as row labels and reappear on the next transpose. The header-value column is identified even after renaming or moving it; the next forward transpose places it first.
+
+Excluded rows/columns are omitted from the transpose; Undo restores the complete prior table, including exclusions. Restore the header-value column before returning if you have excluded it, and restore at least one row if all transposed rows are excluded. A first transpose needs one extra column for the original names, so up to 49 visible rows fit the 50-column limit. Returning a transposed table with 50 rows restores its original 50 columns. Refused operations retain the table and history.
 
 Date/amount conversion, required-field settings and preset controls are deferred. Existing local preset records are neither applied nor deleted by this UI. Excel output, wider collection, AI, ledgers, team/cloud/API features and automated login remain future work.
 
