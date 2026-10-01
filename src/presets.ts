@@ -103,7 +103,7 @@ export function validatePreset(value: unknown): Preset {
   const name = text(fields.name, '設定の名前', 100);
   const sourceOrigin = origin(fields.origin);
   const sourcePath = path(fields.path, sourceOrigin);
-  const tableKey = text(fields.tableKey, '表の識別名', 200);
+  const tableKey = text(fields.tableKey, '範囲の識別名', typeof fields.tableKey === 'string' && fields.tableKey.startsWith('content:') ? LIMITS.cellChars : 200);
   if (!Array.isArray(fields.headers) || fields.headers.length < 1 || fields.headers.length > LIMITS.columns) invalid('表の見出し');
   const headers = Array.from(fields.headers, (header) => text(header, '表の見出し', LIMITS.cellChars, true));
   if (!Array.isArray(fields.columns) || fields.columns.length < 1 || fields.columns.length > headers.length) invalid('選択列の件数');

@@ -1,6 +1,8 @@
 import { LIMITS, type Capture, type ColumnConfig, type InspectRequest, type InspectResult, type Preset, type Preview, type TableCandidate } from './contracts';
 import { inspectPage } from './extraction';
-import { acceptInspection } from './inspection';
+import { acceptInspection, acceptPicked } from './inspection';
+import { pickRegion, cancelRegion, type PickerRequest } from './picker';
+import { watchPanelSource } from './panel-source';
 import { matchesPreset } from './presets';
 import { chromeSavePort, locked, presetStore } from './chrome-ports';
 import { SaveController } from './save';
@@ -13,7 +15,11 @@ const confirmation = element<HTMLInputElement>('confirm');
 const nameInput = element<HTMLInputElement>('preset-name');
 const status = (text: string) => { element('status').textContent = text; };
 type Draft = ColumnConfig & { enabled: boolean };
-let tabId = Number(new URL(location.href).searchParams.get('tab'));
+const directTab = new URL(location.href).searchParams.get('tab');
+let tabId = directTab === null ? -1 : Number(directTab);
+let sourceReady = directTab !== null, saveStarting = false;
+let picker: { requestId: string; tabId: number; documentId: string } | undefined;
+let disposeSource: (() => void) | undefined;
 let sourceUrl = '', documentId = '', candidates: TableCandidate[] = [], selected: TableCandidate | undefined;
 let columns: Draft[] = [], capture: Capture | undefined, preview: Preview | undefined, artifact: Uint8Array | undefined;
 let presets: Preset[] = [], editingId = '', revision = 0, page = 0, busy = false, worker: Worker | undefined;
@@ -25,19 +31,23 @@ const dateFormats = ['YYYY-MM-DD', 'YYYY/MM/DD', 'YYYY年M月D日', 'MM/DD/YYYY'
 
 function savingUnresolved(): boolean { return !!saveController?.attempt && ['saving', 'unknown'].includes(saveController.attempt.state); }
 function updateControls(): void {
-  const blocked = busy || presetBusy || savingUnresolved();
+  const blocked = busy || presetBusy || saveStarting || savingUnresolved();
   tableSelect.disabled = blocked || !candidates.length;
-  button('scan').disabled = blocked;
-  button('show-source').disabled = blocked || !selected;
-  button('capture').disabled = blocked || !selected || !columns.some(value => value.enabled);
+  button('scan').disabled = blocked || !sourceReady;
+  button('pick').disabled = blocked || !sourceReady || !documentId;
+  button('page-content').disabled = blocked || !sourceReady || !documentId;
+  element<HTMLSelectElement>('pick-kind').disabled = blocked;
+  button('use-content').disabled = blocked || !sourceReady || !selected || selected.kind === 'content';
+  button('show-source').disabled = blocked || !sourceReady || !selected || !!selected.error;
+  button('capture').disabled = blocked || !sourceReady || !selected || !!selected.error || !columns.some(value => value.enabled);
   button('refresh-preview').disabled = blocked || !capture;
   button('stop').disabled = !busy;
-  button('save-preset').disabled = blocked || !selected;
+  button('save-preset').disabled = blocked || !sourceReady || !selected || !!selected.error;
   for (const id of ['apply-preset', 'delete-preset']) button(id).disabled = blocked || !presetSelect.value;
   presetSelect.disabled = blocked; nameInput.disabled = blocked;
   for (const field of element('columns').querySelectorAll('fieldset')) field.disabled = blocked;
   confirmation.disabled = blocked || !preview || !artifact || preview.errorCount > 0;
-  button('save').disabled = blocked || !artifact || !confirmation.checked || !!preview?.errorCount || saveController?.attempt?.state === 'saved';
+  button('save').disabled = blocked || !sourceReady || !artifact || !confirmation.checked || !!preview?.errorCount || saveController?.attempt?.state === 'saved';
   button('cancel-save').disabled = saveController?.attempt?.state !== 'saving' || saveController.attempt.downloadId === undefined;
   button('reconcile').disabled = busy;
   element('verify-file').hidden = saveController?.attempt?.state !== 'unknown';
@@ -112,16 +122,56 @@ function renderColumns(): void {
 function defaults(table: TableCandidate): Draft[] {
   return table.headers.map((header, index) => ({ sourceIndex: index, outputName: header || `列${index + 1}`, enabled: true, kind: 'text', required: false, dateFormat: 'YYYY-MM-DD', dateOutput: 'YYYY-MM-DD', amount: { symbol: '', grouping: '', decimal: '.', negative: 'minus' } }));
 }
+function selectRange(candidate: TableCandidate | undefined): void {
+  selected = candidate;
+  columns = selected && !selected.error ? defaults(selected) : []; editingId = ''; presetSelect.value = ''; nameInput.value = '';
+  invalidate(true); renderColumns();
+  const scope = selected?.kind === 'content' ? `${selected.label || '選択した範囲'}（タイトル・内容）` : selected ? `表${selected.index + 1}` : '未選択';
+  element('coverage').textContent = selected ? `取得範囲：現在ページの${scope}だけ・候補確認時 ${selected.rowCount}件 / ${selected.headers.length}列${selected.kind === 'content' ? '（表示文字を変換）' : '（tfootを含む）'}` : '取得範囲：未選択';
+  element('range-notice').textContent = [selected?.error ? `${selected.error} 同じ範囲を「タイトル・内容」にすると、列配置を保たず表示文字を取り込めます。` : '', ...(selected?.warnings || [])].filter(Boolean).join('\n');
+  if (selected?.kind === 'content') {
+    const option = new Option(`${selected.label || '選んだ範囲'}（タイトル・内容）`, 'content');
+    tableSelect.querySelector('option[value="content"]')?.remove(); tableSelect.append(option); tableSelect.value = 'content';
+  } else tableSelect.value = selected ? String(selected.index) : '';
+  status(selected?.error ? '表の列配置を保てません。「この範囲をタイトル・内容にする」で文字として取り込めます。' : '取得する列を設定し、プレビューで値と件数を確認してください。');
+}
 async function inject(request: InspectRequest): Promise<InspectResult> {
   const expectedDocument = documentId, activeRevision = revision;
-  const results = await chrome.scripting.executeScript({ target: { tabId, ...(expectedDocument ? { documentIds: [expectedDocument] } : { frameIds: [0] }) }, func: inspectPage, args: [request], world: 'ISOLATED' });
+  let results: chrome.scripting.InjectionResult<InspectResult>[];
+  try {
+    results = await chrome.scripting.executeScript({ target: { tabId, ...(expectedDocument ? { documentIds: [expectedDocument] } : { frameIds: [0] }) }, func: inspectPage, args: [request], world: 'ISOLATED' });
+  } catch { throw new Error('元ページが変わったか、取得する許可がありません。使うページで拡張アイコンを押し、範囲を選び直してください。'); }
   if (activeRevision !== revision) throw new Error('中止した取得結果は反映しません。');
   const accepted = acceptInspection(results, request, expectedDocument || undefined);
   documentId = accepted.documentId; return accepted.data;
 }
-const request = (mode: InspectRequest['mode'], requestId = crypto.randomUUID()): InspectRequest => ({ mode, expectedUrl: sourceUrl, requestId, tableIndex: selected?.index, tableKey: selected?.key, headers: selected?.headers, sourceIndexes: columns.filter(value => value.enabled).map(value => value.sourceIndex), limits: LIMITS });
+const request = (mode: InspectRequest['mode'], requestId = crypto.randomUUID()): InspectRequest => ({ mode, expectedUrl: sourceUrl, requestId, tableIndex: selected?.index, tableKey: selected?.key, headers: selected?.headers, sourceIndexes: columns.filter(value => value.enabled).map(value => value.sourceIndex), limits: LIMITS, ...(selected?.kind === 'content' ? { kind: 'content', contentSignature: selected.contentSignature } : {}) });
+function stopPicker(): void {
+  const active = picker; picker = undefined;
+  if (active) void chrome.scripting.executeScript({ target: { tabId: active.tabId, documentIds: [active.documentId] }, func: cancelRegion, args: [active.requestId], world: 'ISOLATED' }).catch(() => {});
+}
+function stopWork(): void {
+  revision++; stopPicker(); worker?.terminate(); worker = undefined; cancelWorker?.(); cancelWorker = undefined; busy = false;
+}
+function sourceChanged(): void {
+  sourceReady = false; stopPicker();
+  if (saveStarting || savingUnresolved() || presetBusy) {
+    status('元のページが変わりました。現在の保存・設定処理を確認してから、使うページで拡張アイコンを押してください。');
+    updateControls(); return;
+  }
+  stopWork(); selected = undefined; candidates = []; columns = []; documentId = ''; editingId = '';
+  invalidate(true); renderColumns(); tableSelect.replaceChildren(new Option('ページ上で範囲を選んでください', ''));
+  element('range-notice').textContent = ''; element('coverage').textContent = '取得範囲：未選択';
+  status('使うページで拡張アイコンを押してください。別のページは自動で取得しません。');
+}
+async function activateSource(id: number): Promise<void> {
+  if (saveStarting || savingUnresolved() || presetBusy) { status('保存・設定処理が終わってから、使うページで拡張アイコンを押してください。'); return; }
+  stopWork(); tabId = id; sourceReady = true;
+  await scan();
+}
 async function scan(): Promise<void> {
-  if (busy || presetBusy || savingUnresolved()) return;
+  if (!sourceReady || busy || presetBusy || saveStarting || savingUnresolved()) return;
+  stopPicker();
   busy = true; invalidate(true); selected = undefined; columns = []; candidates = []; documentId = ''; renderColumns(); updateControls();
   element('coverage').textContent = '取得範囲：現在ページの選択した表のみ（表は未選択）';
   const activeRevision = revision;
@@ -132,8 +182,9 @@ async function scan(): Promise<void> {
     const tab = await chrome.tabs.get(tabId);
     if (activeRevision !== revision) return;
     if (!tab.url || !/^https?:\/\//.test(tab.url)) throw new Error('通常のHTTP/HTTPSページで拡張を起動してください。Chromeの設定画面等は取得できません。');
+    if (directTab === null && tab.active === false) { sourceChanged(); return; }
     sourceUrl = tab.url;
-    const safeUrl = new URL(sourceUrl); element('source').textContent = `対象：${safeUrl.origin}（起動したタブに固定）`;
+    const safeUrl = new URL(sourceUrl); element('source').textContent = `対象：${safeUrl.origin}（アイコンを押したページ）`;
     const data = await inject(request('list'));
     if (activeRevision !== revision) return;
     candidates = data.tables || []; tableSelect.replaceChildren(new Option('取得する表を選んでください', ''));
@@ -141,8 +192,39 @@ async function scan(): Promise<void> {
       const option = new Option(`表 ${table.index + 1}：${table.headers.slice(0, 5).join(' / ')}（${table.rowCount}件）${table.error ? '・対象外：' + table.error : ''}`, String(table.index));
       option.disabled = !!table.error; tableSelect.append(option);
     }
-    status(candidates.some(value => !value.error) ? '表を選び、取得する列と書式を設定してください。' : '取得できる通常HTML表がありません。ログイン切れの場合は元サイトでログインし直し、表を探し直してください。');
+    status(candidates.some(value => !value.error) ? 'ページ上で範囲または表を選び、取得する列と書式を設定してください。' : 'ページ上で範囲を選ぶか、ページ全体を使ってください。表がなくても文章を取り込めます。');
   } catch (error) { if (activeRevision === revision) status(error instanceof Error ? error.message : 'ページを取得できませんでした。本人が再ログインした後に、元のページから開き直してください。'); }
+  finally { if (activeRevision === revision) { busy = false; updateControls(); } }
+}
+async function describeRange(kind?: 'content', key?: string, index?: number): Promise<void> {
+  if (!sourceReady || busy || presetBusy || saveStarting || savingUnresolved()) return;
+  busy = true; invalidate(true); updateControls();
+  const activeRevision = revision;
+  try {
+    const data = await inject({ mode: 'describe', requestId: crypto.randomUUID(), expectedUrl: sourceUrl, limits: LIMITS, kind, tableKey: key, tableIndex: index });
+    if (activeRevision !== revision) return;
+    busy = false; selectRange(data.tables?.[0]);
+  } catch (error) { if (activeRevision === revision) status(error instanceof Error ? error.message : '選んだ範囲を取得できませんでした。'); }
+  finally { if (activeRevision === revision) { busy = false; updateControls(); } }
+}
+async function pick(): Promise<void> {
+  if (!sourceReady || !documentId || busy || presetBusy || saveStarting || savingUnresolved()) return;
+  busy = true; invalidate(true); updateControls();
+  const activeRevision = revision, expectedDocument = documentId;
+  const call: PickerRequest = { requestId: crypto.randomUUID(), expectedUrl: sourceUrl, ...(element<HTMLSelectElement>('pick-kind').value === 'content' ? { kind: 'content' } : {}) };
+  picker = { requestId: call.requestId, tabId, documentId: expectedDocument };
+  status('ページ上で範囲を選んでください。クリックで確定、↑で広げる、↓で戻す、Escで取消です。');
+  try {
+    let results: chrome.scripting.InjectionResult<Awaited<ReturnType<typeof pickRegion>>>[];
+    try {
+      results = await chrome.scripting.executeScript({ target: { tabId, documentIds: [expectedDocument] }, func: pickRegion, args: [call], world: 'ISOLATED' });
+    } catch { throw new Error('元ページが変わったか、選択する許可がありません。使うページで拡張アイコンを押し、範囲を選び直してください。'); }
+    if (activeRevision !== revision) return;
+    picker = undefined;
+    const picked = acceptPicked(results, call, expectedDocument).data;
+    busy = false;
+    await describeRange(picked.kind === 'content' ? 'content' : undefined, picked.key, picked.index);
+  } catch (error) { if (activeRevision === revision) { picker = undefined; status(error instanceof Error ? error.message : '範囲を選択できませんでした。'); } }
   finally { if (activeRevision === revision) { busy = false; updateControls(); } }
 }
 function visible(value: string): string {
@@ -169,7 +251,7 @@ function renderPreview(): void {
   });
   container.append(table);
   const pages = Math.max(1, Math.ceil(preview.rows.length / 100)); element('page').textContent = `${page + 1} / ${pages} ページ（表示は100件ずつ・CSVには取得した全行）`;
-  element('summary').textContent = `取得 ${preview.sourceCount}件 / 出力 ${preview.rows.length}件 / 選択 ${preview.headers.length}列 / 空欄 ${preview.emptyCount}セル / エラー ${preview.errorCount}件 / CSV保護 ${preview.protectionCount}件。現在ページの選択した表のみ。取得時刻：${capture?.capturedAt || ''}`;
+  element('summary').textContent = `取得 ${preview.sourceCount}件 / 出力 ${preview.rows.length}件 / 選択 ${preview.headers.length}列 / 空欄 ${preview.emptyCount}セル / エラー ${preview.errorCount}件 / CSV保護 ${preview.protectionCount}件。現在ページの選択した範囲のみ。取得時刻：${capture?.capturedAt || ''}`;
   const dataErrors = preview.rows.flat().filter(cell => cell.error).length;
   element('header-notice').textContent = preview.errorCount > dataErrors ? '出力列名に使えない制御文字があります。列名を直してください。' : preview.headers.some((value, index) => value !== config[index]?.outputName) ? '式に見える出力列名にも、保護用タブを加えています。' : '';
   element('confirm-label').textContent = preview.rows.length === 0 ? '0件の表です。見出しだけのCSVを保存することを確認しました' : `元値・出力値・${preview.rows.length}件・保護の変更を確認しました`;
@@ -199,7 +281,7 @@ async function calculate(): Promise<void> {
   finally { if (activeRevision === revision) { worker?.terminate(); worker = undefined; cancelWorker = undefined; busy = false; updateControls(); } }
 }
 async function acquire(): Promise<void> {
-  if (!selected || busy || savingUnresolved()) return;
+  if (!sourceReady || !selected || selected.error || busy || presetBusy || saveStarting || savingUnresolved()) return;
   busy = true; invalidate(true); updateControls(); status('選んだ表の列を取得しています。');
   const activeRevision = revision, call = request('capture');
   try {
@@ -207,6 +289,7 @@ async function acquire(): Promise<void> {
     if (activeRevision !== revision || received.has(call.requestId)) return;
     if (!data.capture) throw new Error('取得結果がありません。');
     received.add(call.requestId); capture = data.capture;
+    element('range-notice').textContent = (capture.warnings || selected.warnings || []).join('\n');
     busy = false; await calculate();
   } catch (error) { if (activeRevision === revision) status(error instanceof Error ? error.message : '取得に失敗しました。元ページを確認し、再取得してください。'); }
   finally { if (activeRevision === revision) { busy = false; updateControls(); } }
@@ -217,18 +300,28 @@ async function reloadPresets(): Promise<void> {
   presetSelect.value = editingId; updateControls();
 }
 tableSelect.addEventListener('change', () => {
-  selected = candidates.find(value => String(value.index) === tableSelect.value && !value.error);
-  columns = selected ? defaults(selected) : []; editingId = ''; presetSelect.value = ''; nameInput.value = '';
-  invalidate(true); renderColumns(); element('coverage').textContent = selected ? `取得範囲：現在ページの表${selected.index + 1}だけ・候補確認時 ${selected.rowCount}件 / ${selected.headers.length}列（tfootを含む）` : '取得範囲：現在ページの選択した表のみ';
+  if (busy || presetBusy || saveStarting || savingUnresolved() || !sourceReady || tableSelect.value === 'content') return;
+  selectRange(candidates.find(value => String(value.index) === tableSelect.value && !value.error));
 });
 button('scan').addEventListener('click', () => { void scan(); });
+button('pick').addEventListener('click', () => { void pick(); });
+button('page-content').addEventListener('click', () => { void describeRange('content'); });
+button('use-content').addEventListener('click', () => {
+  if (selected) { element<HTMLSelectElement>('pick-kind').value = 'content'; void describeRange('content', selected.key.startsWith('content:') ? selected.key : `content:${selected.key}`, 0); }
+});
 button('show-source').addEventListener('click', () => {
-  void inject(request('highlight')).then(() => chrome.tabs.update(tabId, { active: true })).catch(() => status('元のページが変わったか、タブが閉じられました。表を探し直してください。'));
+  if (busy || presetBusy || saveStarting || savingUnresolved() || !sourceReady || !selected || selected.error) return;
+  const activeRevision = revision, sourceTabId = tabId;
+  void inject(request('highlight')).then(() => {
+    if (activeRevision === revision) return chrome.tabs.update(sourceTabId, { active: true });
+  }).catch(() => {
+    if (activeRevision === revision) status('元のページが変わったか、タブが閉じられました。範囲を選び直してください。');
+  });
 });
 button('capture').addEventListener('click', () => { void acquire(); });
 button('refresh-preview').addEventListener('click', () => { void calculate(); });
 button('stop').addEventListener('click', () => {
-  revision++; worker?.terminate(); worker = undefined; cancelWorker?.(); cancelWorker = undefined; busy = false; capture = undefined; preview = undefined; artifact = undefined; confirmation.checked = false;
+  stopWork(); capture = undefined; preview = undefined; artifact = undefined; confirmation.checked = false;
   element('preview').replaceChildren(); element('summary').textContent = '処理を中止しました。再取得してください。'; status('処理を中止しました。自動では再開しません。'); updateControls();
 });
 button('previous').addEventListener('click', () => { page--; renderPreview(); });
@@ -239,6 +332,7 @@ presetSelect.addEventListener('change', () => {
   updateControls();
 });
 button('apply-preset').addEventListener('click', () => {
+  if (!sourceReady || busy || presetBusy || saveStarting || savingUnresolved()) return;
   const preset = presets.find(value => value.id === presetSelect.value); if (!preset || !selected) return;
   const url = new URL(sourceUrl);
   if (!matchesPreset(preset, url.origin, url.pathname, selected.key, selected.headers)) { element('preset-status').textContent = 'サイト・ページ・表・列の構造が一致しません。旧設定は変更しません。表を選び直すか、新しい設定を作ってください。'; return; }
@@ -247,7 +341,7 @@ button('apply-preset').addEventListener('click', () => {
   editingId = preset.id; nameInput.value = preset.name; invalidate(true); renderColumns(); element('preset-status').textContent = '選択した設定を反映しました。再取得して確認してください。';
 });
 button('save-preset').addEventListener('click', async () => {
-  if (!selected || presetBusy || busy || savingUnresolved()) return;
+  if (!sourceReady || !selected || selected.error || presetBusy || busy || saveStarting || savingUnresolved()) return;
   presetBusy = true; updateControls();
   try {
     const url = new URL(sourceUrl);
@@ -258,16 +352,19 @@ button('save-preset').addEventListener('click', async () => {
   finally { presetBusy = false; updateControls(); }
 });
 button('delete-preset').addEventListener('click', async () => {
-  const id = presetSelect.value; if (!id || presetBusy || busy || savingUnresolved()) return;
+  const id = presetSelect.value; if (!id || presetBusy || busy || saveStarting || savingUnresolved()) return;
   presetBusy = true; updateControls();
   try { await locked('mvp-presets', () => presetStore.remove(id)); if (editingId === id) { editingId = ''; nameInput.value = ''; } await reloadPresets(); element('preset-status').textContent = '選んだ設定を削除しました。現在の列設定は画面に残っています。'; }
   catch { element('preset-status').textContent = '設定を削除できませんでした。もう一度確認してください。'; }
   finally { presetBusy = false; updateControls(); }
 });
 button('save').addEventListener('click', async () => {
-  if (!artifact || !confirmation.checked || preview?.errorCount || busy || savingUnresolved()) return;
-  try { await saveController.start(artifact, `transactions-${new Date().toISOString().slice(0, 10)}.csv`); await saveController.reconcile(); }
+  if (!sourceReady || !artifact || !confirmation.checked || preview?.errorCount || busy || presetBusy || saveStarting || savingUnresolved()) return;
+  saveStarting = true; updateControls();
+  const controller = saveController, bytes = artifact;
+  try { await controller.start(bytes, `page-${new Date().toISOString().slice(0, 10)}.csv`); await controller.reconcile(); }
   catch { status('保存を開始できませんでした。保存状態を照合してください。'); }
+  finally { saveStarting = false; }
   renderSave();
 });
 button('cancel-save').addEventListener('click', () => { void saveController.cancel().then(renderSave).catch(() => { status('取消結果を確認できません。保存状態を照合してください。'); renderSave(); }); });
@@ -278,13 +375,19 @@ element<HTMLInputElement>('file').addEventListener('change', async event => {
   catch { status('ファイルの内容が一致しないか、照合を記録できませんでした。不明状態のままです。'); }
   finally { input.value = ''; }
 });
-window.addEventListener('pagehide', () => { worker?.terminate(); saveController?.dispose(); capture = undefined; artifact = undefined; preview = undefined; });
+window.addEventListener('pagehide', () => { stopWork(); disposeSource?.(); saveController?.dispose(); capture = undefined; artifact = undefined; preview = undefined; });
+document.addEventListener('visibilitychange', () => { if (document.hidden && picker) { stopWork(); updateControls(); status('範囲選択を中止しました。もう一度範囲を選んでください。'); } });
+if (directTab === null) {
+  chrome.tabs.onUpdated.addListener((id, change) => { if (id === tabId && (change.status === 'loading' || change.url && change.url !== sourceUrl)) sourceChanged(); });
+  chrome.tabs.onRemoved.addListener(id => { if (id === tabId) sourceChanged(); });
+}
 async function initialize(): Promise<void> {
   freshSaveController();
   try {
     await chrome.storage.local.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' });
     await reloadPresets(); await saveController.reconcile();
-    await scan();
+    if (directTab !== null) await scan();
+    else disposeSource = await watchPanelSource(activateSource, sourceChanged);
   } catch { status('ローカル設定か保存照合情報を確認できません。保存済み設定を上書きせず停止しました。'); }
   renderSave();
 }

@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="ja">
+<head><meta charset="utf-8"><title>合成ドキュメント</title></head>
+<body id="page">
+  <header role="banner"><p>サイトの案内</p></header>
+  <nav><p><a href="/elsewhere">ページ移動</a></p></nav>
+  <main id="guide">
+    <header><h1>利用ガイド</h1><p>表示中の文書を保存します。</p></header>
+    <h2>準備</h2>
+    <p>画面を開き、<a href="https://secret.example/token" title="do-not-capture-title">内容</a>を確認します。</p>
+    <p hidden>do-not-capture-hidden</p>
+    <div style="display:none"><p>do-not-capture-display-none</p></div>
+    <div style="visibility:hidden"><p>do-not-capture-invisible</p></div>
+    <form><label><p>ログイン名</p><input value="do-not-capture-form-value"></label></form>
+    <input value="do-not-capture-input"><textarea>do-not-capture-textarea</textarea>
+    <select><option>do-not-capture-option</option></select>
+    <p>保存操作:<button>保存</button></p>
+    <div role="menu"><p>編集メニュー</p></div>
+    <aside><p>関連情報</p></aside>
+    <footer><p>更新情報</p></footer>
+    <script>do-not-capture-script</script><style>.sample {color:red}</style><template>do-not-capture-template</template>
+    <h2>読み取り</h2>
+    <p>画面の本文だけを扱います。<br>次の段落も残します。</p>
+    <h3>内容の例</h3>
+    <ul><li>最初の項目</li><li>二番目の項目</li></ul>
+    <dl><dt>対象</dt><dd>読み込み済みの内容</dd><dt>出力</dt><dd>CSV</dd></dl>
+    <h3>コード</h3>
+    <pre>const example = "日本語";
+  console.log(example);</pre>
+    <h2>確認</h2>
+    <p>同じ内容</p><p>同じ内容</p>
+  </main>
+  <section id="other"><h2>別の領域</h2><p>do-not-capture-other-region</p></section>
+</body>
+</html>

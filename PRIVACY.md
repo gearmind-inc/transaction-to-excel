@@ -4,9 +4,10 @@ No product account, server, analytics, cloud sync, AI or external API is include
 
 ## Read and retention boundaries
 
-- Only the top-level document of the tab where you click the action is read. Discovery reads headers/counts; acquisition copies selected columns' text. No form values, passwords, cookies, tokens, link targets, other tabs, frames or Shadow DOM are read. Forms/inputs, merged cells and nested tables are rejected.
-- Transactions, transformed values, previews and CSV bytes stay in workspace memory. Closing/reloading loses them. Acquire again; no archive or automatic recovery exists.
+- Only the top-level document of the tab where you click the action is read. Table discovery reads headers/counts. Explicit range selection or whole-page selection reads visible text to identify headings/counts and then acquires the selected columns. Navigation/footer, article/card, button and form labels are eligible when selected. No form-control values, passwords, cookies, tokens, link targets, other tabs, frame interiors or Shadow DOM interiors are read. Normal table mode rejects unsupported layouts; explicit content mode reads the same region’s text and reports unsupported structures without inferring hidden data.
+- Page values, transformed values, previews and CSV bytes stay in side-panel memory. Closing/reloading loses them. Acquire again; no archive or automatic recovery exists.
 - Explicitly saved presets use chrome.storage.local: name, origin/path without query/fragment, table key/headers, output columns and conversion settings. No transaction samples. Authentication paths are refused. Do not put secrets/account numbers in names or labels. Delete presets in the workspace.
+- chrome.storage.session holds only a per-window toolbar activation: tab ID and random activation ID. It holds no URL, page text or captured rows. The panel subscribes to new activations; another tab is only acquired after its toolbar action is clicked. Switching/navigating/closing the source invalidates the selection.
 - One minimal local save-attempt record: export ID, SHA-256 digest, timestamp, download ID if known, state and bounded reason code. Not a transaction ledger. A new resolved export replaces the old record; unresolved exports block new saves until reconciliation, without automatic clearing/retry.
 - Completed CSV goes to your chosen PC folder. Choose a non-synced folder. OneDrive/other software can upload files in its folders; the extension cannot prevent that.
 
@@ -17,11 +18,12 @@ No storage.sync, transaction IndexedDB, authentication storage or transaction lo
 | Permission | Purpose |
 | --- | --- |
 | activeTab | Temporary access to the tab where you click the action |
-| scripting | Read/highlight one selected ordinary table in that top-level document |
+| scripting | Select/highlight a range and read its chosen visible text in that top-level document |
 | storage | Local presets and minimal save metadata |
 | downloads | Save confirmed CSV and reconcile its result |
+| sidePanel | Show controls alongside the current website, without a new workspace tab |
 
-No permanent host, cookies, history, debugger, identity, AI or cloud permissions. Tab/document/URL/table/header matching is enforced separately.
+No permanent host, cookies, history, debugger, identity, AI or cloud permissions. Tab/document/URL/range/header matching is enforced separately.
 
 ## CSV and support
 

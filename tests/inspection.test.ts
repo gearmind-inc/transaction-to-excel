@@ -7,6 +7,36 @@ import { EXPECTED_CAPTURE, FIXTURE_URL, HEADERS, REQUEST_ID } from './fixtures/e
 const request: InspectRequest = { mode: 'capture', expectedUrl: FIXTURE_URL, requestId: REQUEST_ID, tableIndex: 1, tableKey: 'id:transactions', headers: HEADERS, sourceIndexes: [0, 1, 2, 3, 4], limits: LIMITS };
 const data: InspectResult = { schemaVersion: 1, requestId: REQUEST_ID, url: FIXTURE_URL, capture: EXPECTED_CAPTURE };
 const result = () => [{ frameId: 0, documentId: 'doc-1', result: structuredClone(data) }];
+
+test('content descriptions validate kind, signature, warnings and exact selected identity', () => {
+  const describe: InspectRequest = { mode: 'describe', kind: 'content', expectedUrl: FIXTURE_URL, requestId: REQUEST_ID, tableKey: 'content:id:article', limits: LIMITS };
+  const candidate = { index: 0, key: describe.tableKey!, kind: 'content' as const, headers: ['タイトル', '内容'], rowCount: 2, contentSignature: 'heading-fingerprint', warnings: ['図形のデータは含みません。'] };
+  const envelope = () => [{ frameId: 0, documentId: 'doc-1', result: { schemaVersion: 1 as const, requestId: REQUEST_ID, url: FIXTURE_URL, tables: [structuredClone(candidate)] } }];
+  assert.equal(acceptInspection(envelope(), describe, 'doc-1').data.tables?.[0].key, candidate.key);
+  for (const mutate of [
+    (value: Record<string, unknown>) => { value.kind = 'table'; },
+    (value: Record<string, unknown>) => { value.key = 'content:id:another'; },
+    (value: Record<string, unknown>) => { value.contentSignature = ''; },
+    (value: Record<string, unknown>) => { value.contentSignature = 'x'.repeat(129); },
+    (value: Record<string, unknown>) => { value.warnings = [123]; },
+    (value: Record<string, unknown>) => { value.rowCount = 5001; },
+  ]) {
+    const values = envelope(); mutate(values[0].result.tables[0]);
+    assert.throws(() => acceptInspection(values, describe, 'doc-1'), 'malformed or foreign region descriptions must be refused');
+  }
+  const empty = envelope(); empty[0].result.tables = [];
+  assert.throws(() => acceptInspection(empty, describe, 'doc-1'));
+});
+
+test('content capture must retain the selected heading signature and bounded exclusions', () => {
+  const contentRequest: InspectRequest = { ...request, kind: 'content', tableKey: 'content:id:article', headers: ['タイトル', '内容'], sourceIndexes: [0, 1], contentSignature: 'heading-fingerprint' };
+  const envelope = () => [{ frameId: 0, documentId: 'doc-1', result: { schemaVersion: 1 as const, requestId: REQUEST_ID, url: FIXTURE_URL, capture: { ...structuredClone(EXPECTED_CAPTURE), tableKey: contentRequest.tableKey!, headers: ['タイトル', '内容'], sourceIndexes: [0, 1], rows: [['章', '本文']], contentSignature: 'heading-fingerprint', warnings: ['図形のデータは含みません。'] } } }];
+  assert.equal(acceptInspection(envelope(), contentRequest, 'doc-1').data.capture?.rows[0][1], '本文');
+  const wrong = envelope(); wrong[0].result.capture.contentSignature = 'another';
+  assert.throws(() => acceptInspection(wrong, contentRequest, 'doc-1'));
+  const invalid = envelope(); invalid[0].result.capture.warnings = Array(51).fill('unexpected');
+  assert.throws(() => acceptInspection(invalid, contentRequest, 'doc-1'));
+});
 test('only the requested browser document and exact capture schema cross the boundary', () => {
   assert.equal(acceptInspection(result(), request, 'doc-1').data.capture?.rows.length, 8);
   assert.throws(() => acceptInspection([], request));

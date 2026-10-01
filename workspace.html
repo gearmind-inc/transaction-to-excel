@@ -2,19 +2,26 @@
 <html lang="ja">
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>取引表 → CSV</title><link rel="stylesheet" href="workspace.css">
+  <title>Webページ → CSV</title><link rel="stylesheet" href="workspace.css">
 </head>
 <body>
-  <header><span class="badge">無料・ローカル MVP</span><h1>取引表をCSVへ</h1>
-    <p>現在ページの選択した表だけを読みます。次ページの取得やログイン操作はしません。</p>
+  <header><span class="badge">無料・ローカル MVP</span><h1>このページをCSVへ</h1>
+    <p>ページ上の範囲を選び、表や文章を列に変換して保存します。</p>
     <p class="notice">取引とCSVはこの画面のメモリだけで扱います。画面を閉じる・再読み込みする場合は再取得が必要です。</p>
   </header>
   <main>
     <p id="status" role="status" aria-live="polite">準備中です。</p>
-    <section aria-labelledby="source-heading"><h2 id="source-heading">1. 表を選ぶ</h2>
+    <section aria-labelledby="source-heading"><h2 id="source-heading">1. ページの範囲を選ぶ</h2>
       <p id="source">元のページを確認中です。</p>
-      <div class="actions"><button id="scan">表を探し直す</button><button id="show-source" disabled>元のページで表を確認</button></div>
-      <label>取得する表 <select id="table" disabled><option>表を確認してください</option></select></label>
+      <div class="actions"><button id="pick" disabled>ページ上で範囲を選ぶ</button><button id="page-content" disabled>ページ全体を使う</button></div>
+      <label>取り込み方 <select id="pick-kind"><option value="auto">表は元の列、その他はタイトル・内容</option><option value="content">選んだ範囲をタイトル・内容にする</option></select></label>
+      <p>ページにマウスを重ねると範囲が色づきます。クリックで選択、↑で広げる、↓で戻す、Escで取消。画面の下にある、読み込み済みの内容も対象です。</p>
+      <div class="actions"><button id="use-content" disabled>この範囲をタイトル・内容にする</button><button id="show-source" disabled>選んだ範囲を確認</button></div>
+      <p id="range-notice" role="status"></p>
+      <details><summary>表の一覧から選ぶ</summary>
+        <div class="actions"><button id="scan">ページを確認し直す</button></div>
+        <label>取得する表 <select id="table" disabled><option>表を確認してください</option></select></label>
+      </details>
       <p id="coverage">取得範囲：現在ページの選択した表のみ</p>
     </section>
     <section aria-labelledby="preset-heading"><h2 id="preset-heading">保存した設定</h2>
@@ -46,7 +53,7 @@
         <li>金額の精度、日付の月日順・地域を指定します。15桁を超える数値は、桁を保つ場合は文字列で取り込みます。</li>
         <li>先頭ゼロ・長いID・日付・金額・件数を元ページと照合します。式に見える文字列には保護用タブが加わります。その扱いも確認してください。</li></ol>
       <p>CSVにはExcelの書式・数式・セル型を保存できません。直接開くとID等が自動変換されることがあります。Excelで編集してCSVへ保存し直した後の数式保護は保証しません。画面名はExcelの版で異なります。</p>
-      <p>通常HTML表だけに対応します。結合セル・入れ子表・入力部品のある表・複数行見出し・iframe・Shadow DOM・仮想一覧は対象外です。表の先頭一行を見出し、残りをデータ（tfootを含む）として読みます。</p>
+      <p>通常の表は先頭一行を見出し、残りをデータ（tfootを含む）として読みます。列を保てない表も、同じ範囲を「タイトル・内容」の文字として取り込めます。文章・カード・メニューなどは表示される文字を取得します。画像やグラフの線から数値は推測しません。入力値、非表示、未読込部分、iframe・Shadow DOMの内部は取り込まず、選択後に取得できない部分を案内します。</p>
       <p>上限：5,000行・50列・1セル10,000文字・取得文字合計2,000,000文字。超過時は出力しません。これは処理性能を保証する件数ではありません。</p>
       <p>クラウド、共有、AI、API、Excelブック出力、重複台帳、取引の復旧はこの版にありません。同じ値の別取引を削除せず、過去の出力との重複も自動判定しません。</p>
     </details>
