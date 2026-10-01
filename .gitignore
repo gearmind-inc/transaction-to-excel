@@ -1,0 +1,24 @@
+# --- ChromeExtension 共通ルール (親フォルダの AGENTS.md / rules/work.md) ---
+# 公開するのはソースだけ。AI ツールの作業状況・作業履歴・絶対パスを含むものは公開しない
+# AI ツール (beads の DB はローカル専用。GitHub には push しない)
+.beads/
+.claude/
+.codex/
+.cursor/
+.agents/
+CLAUDE.md
+AGENTS.md
+# 開発時のドキュメント・仕様・計画・一時出力
+docs/
+plans/
+specs/
+output/
+# ローカル環境・ログ
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+# ビルド成果物・依存
+node_modules/
+dist/
