@@ -1,0 +1,30 @@
+# Data handling — local CSV MVP
+
+No product account, server, analytics, cloud sync, AI or external API is included. Packaged code does not send transactions, settings, files or diagnostics over the network; extension-page CSP blocks external connections. The website and Chrome can still communicate normally.
+
+## Read and retention boundaries
+
+- Only the top-level document of the tab where you click the action is read. Discovery reads headers/counts; acquisition copies selected columns' text. No form values, passwords, cookies, tokens, link targets, other tabs, frames or Shadow DOM are read. Forms/inputs, merged cells and nested tables are rejected.
+- Transactions, transformed values, previews and CSV bytes stay in workspace memory. Closing/reloading loses them. Acquire again; no archive or automatic recovery exists.
+- Explicitly saved presets use chrome.storage.local: name, origin/path without query/fragment, table key/headers, output columns and conversion settings. No transaction samples. Authentication paths are refused. Do not put secrets/account numbers in names or labels. Delete presets in the workspace.
+- One minimal local save-attempt record: export ID, SHA-256 digest, timestamp, download ID if known, state and bounded reason code. Not a transaction ledger. A new resolved export replaces the old record; unresolved exports block new saves until reconciliation, without automatic clearing/retry.
+- Completed CSV goes to your chosen PC folder. Choose a non-synced folder. OneDrive/other software can upload files in its folders; the extension cannot prevent that.
+
+No storage.sync, transaction IndexedDB, authentication storage or transaction logging. Local storage is restricted to trusted extension contexts. Uninstall removes settings, not CSVs or Chrome's download history. Only a recorded download ID is queried; broader history is not collected.
+
+## Permissions
+
+| Permission | Purpose |
+| --- | --- |
+| activeTab | Temporary access to the tab where you click the action |
+| scripting | Read/highlight one selected ordinary table in that top-level document |
+| storage | Local presets and minimal save metadata |
+| downloads | Save confirmed CSV and reconcile its result |
+
+No permanent host, cookies, history, debugger, identity, AI or cloud permissions. Tab/document/URL/table/header matching is enforced separately.
+
+## CSV and support
+
+Formula-looking text/headers receive a leading tab, displayed as ⟦TAB⟧; converted valid negative amounts do not. Disallowed controls block output. BOM/quotes do not preserve Excel types. Import IDs/phones/formula-looking columns as Text before automatic conversion; check protection tabs. Protection after editing/re-saving or in all spreadsheet apps is not guaranteed.
+
+Use synthetic data for bug reports. Do not upload transaction CSVs, account details, authentication URLs or raw screenshots. Automated checks do not prove support for a particular real site or Excel version; see README.
