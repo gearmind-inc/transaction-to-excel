@@ -87,6 +87,27 @@ test('capture refuses rowspan/colspan, nested tables, form controls, uneven cell
   rejectsCapture(simplePage('<tr><td>x</td><td>y</td></tr>', undefined, 'style="display:none"'));
   rejectsCapture('<div style="visibility:hidden">' + simplePage('<tr><td>x</td><td>y</td></tr>') + '</div>');
 });
+test('span=1 cells remain selectable ordinary cells and preserve selected original values', () => withPage(simplePage(
+  '<tr><td rowspan="1" colspan="1"> \t日本語"引用"<br>二行目</td><td rowspan="1" colspan="1">00001</td></tr>',
+  '<tr><th rowspan="1" colspan="1">A</th><th rowspan="1" colspan="1">B</th></tr>',
+), () => {
+  const listed = inspectPage(simpleRequest({ mode: 'list' }));
+  assert.equal(listed.error, undefined);
+  assert.deepEqual(listed.tables, [{ index: 0, key: 'id:transactions', headers: ['A', 'B'], rowCount: 1 }]);
+  assert.ok(!JSON.stringify(listed).includes('日本語'), 'candidate discovery must not read data values');
+  const captured = inspectPage(simpleRequest({ sourceIndexes: [1, 0] }));
+  assert.equal(captured.error, undefined);
+  assert.deepEqual(captured.capture?.rows, [['00001', ' \t日本語"引用"\n二行目']]);
+}));
+test('rowspan=0 spans the remaining rows and is still rejected even when physical cell counts match', () => withPage(simplePage(
+  '<tr><td rowspan="0">x</td><td>y</td></tr><tr><td>z</td><td>w</td></tr>',
+), () => {
+  const listed = inspectPage(simpleRequest({ mode: 'list' }));
+  assert.match(listed.tables?.[0].error ?? '', /結合セル/);
+  const captured = inspectPage(simpleRequest());
+  assert.match(captured.error ?? '', /結合セル/);
+  assert.equal(captured.capture, undefined, 'a true merged cell must not expose partial capture');
+}));
 test('empty table is a successful zero-row capture, not a read failure', () => withPage(simplePage(''), () => {
   const result = inspectPage(simpleRequest());
   assert.equal(result.error, undefined);

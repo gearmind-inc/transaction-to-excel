@@ -43,7 +43,7 @@ For this fixture only, set the date column to **date / YYYY/MM/DD** and amount t
 ## Explicit formats and bounds
 
 - One visible, rectangular, top-level HTML table; first row is header, thead at most one row, remaining rows include tfoot. Duplicate/empty source headers use column position. Text nodes stay untrimmed; br becomes LF. No attribute/link/form-value reading.
-- Merged cells, nested tables, forms/inputs, uneven rows, multirow headers, frames, Shadow DOM and virtual/card lists are refused, not approximated.
+- Merged cells, nested tables, forms/inputs, uneven rows, multirow headers, frames, Shadow DOM and virtual/card lists are refused, not approximated. Explicit rowspan="1"/colspan="1" cells are ordinary cells and are accepted; rowspan="0" remains unsupported.
 - Date input: YYYY-MM-DD, YYYY/MM/DD, YYYY年M月D日, MM/DD/YYYY, DD/MM/YYYY. Output: YYYY-MM-DD or YYYY/MM/DD. Gregorian years 1–9999, real dates only; no missing-year/timezone/timestamp/era inference.
 - Amount: explicitly choose no symbol/prefix ¥,$,€/suffix 円; no/comma/dot grouping; dot/comma decimal; leading-minus/parentheses negative. Selected symbol required, valid grouping and distinct separators. No whitespace/fullwidth digit/dash-as-zero/arithmetic/trailing-minus guessing. Decimal digits/fractional trailing zeros remain exact, no floating point.
 - Blank is not zero. IDs remain text unless explicitly changed. Identical transaction values never delete rows.
@@ -72,11 +72,24 @@ PLAYWRIGHT_BROWSERS_PATH=node_modules/.cache/ms-playwright npm run test:browser
 
 Hand-authored fixtures/expectations and independent CSV reader: tests/fixtures and tests/oracle.ts. Health checks reject changed dates, money, counts, source and blank/zero. Before implementation, valid empty adapters failed semantic comparisons while oracle checks passed. Save/preset evaluators also preceded implementation. CI retains these checks without relying on ignored internal specifications.
 
-Local results: 232 automated assertions, TypeScript check, build, and seven isolated browser scenarios pass. Chrome for Testing 153.0.8010.12 on macOS 26.4.1 (Apple M4 Max, 64 GiB) saved the exact 476-byte oracle CSV. Twenty fixed 1,000-row × 30-column trials were below 3 seconds (95th percentile 282.3 ms, maximum 1,412.8 ms); not a guarantee for other machines.
+Local results: 234 automated tests, TypeScript check, build, and seven isolated browser scenarios pass. Chrome for Testing 153.0.8010.12 on macOS 26.4.1 (Apple M4 Max, 64 GiB) saved the exact 476-byte oracle CSV. Twenty fixed 1,000-row × 30-column trials were below 3 seconds (95th percentile 282.8 ms, maximum 297.9 ms); not a guarantee for other machines.
 
 Browser automation uses a temporary isolated copy with **test-only loopback host permission** for injection/worker/UI. Production has no host permission. This does not prove activeTab or native Save As; normal Chrome is separate evidence. CI passed the same automated checks on Linux/Windows/macOS, not Excel or business acceptance. The PR records actual CI results and release-readiness score.
 
-For normal macOS Chrome, the production build was loaded and toolbar-to-workspace opening was observed. On 2026-10-01, the operator reported successful save and cancellation after following the synthetic fixture's capture/preview/save/reload/cancel steps. This is **operator-reported evidence**, not independently observed CSV bytes or an Excel import. The running desktop Chrome version was not recorded. Normal Windows Chrome, Excel import on both OSes, authorized real-site comparison and business acceptance remain unverified release gates; no universal Chrome/site compatibility is claimed.
+For normal macOS Chrome, the production build was loaded and toolbar-to-workspace opening was observed. On 2026-10-01, the operator reported successful save and cancellation after following the synthetic fixture's capture/preview/save/reload/cancel steps. This is **operator-reported evidence**, not independently observed CSV bytes or an Excel import. The running desktop Chrome version was not recorded. Normal Windows Chrome, Excel import on both OSes, and business acceptance remain unverified release gates; no universal Chrome/site compatibility is claimed. Reload the unpacked extension after rebuilding and reopen its workspace before using changed code.
+
+### Authorized public-table checks (2026-10-01)
+
+Four public sites were checked against expectations fixed before evaluation, with independent source/CSV readers. These are saved HTTP HTML and separately labelled read-only browser DOM snapshots replayed through the product extraction/preview/CSV functions, **not extension-UI or native-save tests**. Page scripts and external CSS do not run in the replay; continuing page behavior, Excel and business acceptance are not proved.
+
+| Public source | Observed input and result |
+| --- | --- |
+| [W3Schools HTML tables](https://www.w3schools.com/html/html_tables.asp) | 6 rows, 3 source columns. Country then Company, excluding Contact: all values and the hand-authored 224-byte CSV match. The visible table's browser DOM values also match the source expectation. |
+| [DataTables example](https://datatables.net/examples/core/basic_init/zero_configuration.html) | HTTP HTML has 57 data rows plus a footer; the live browser DOM has only 10 current data rows plus the footer. Name/start date/salary capture matches each input. Explicit date/amount settings report 2 footer errors and block CSV. A separately chosen text setting preserves every row: 2,406 bytes for HTTP HTML, 494 bytes for current DOM, both independently read back. No all-page capture claim. |
+| [ECB reference rates](https://www.ecb.europa.eu/stats/policy_and_exchange_rates/euro_reference_exchange_rates/html/index.en.html) | Merged header cells: explicitly refused, no CSV. This is an unsupported-input check, not an export success. |
+| [Bank of Japan rate history](https://www.boj.or.jp/statistics/boj/other/discount/discount.htm) | Merged cells: explicitly refused, no CSV. Japanese-era date conversion is not claimed. |
+
+The DataTables live DOM exposed an erroneous rejection of ordinary span=1 cells. A regression failed before the fix; the same five public inputs/expectations match after the fix. Genuine merged cells still stop extraction. Private banking/source tabs were not tested.
 
 ## Privacy and scope
 

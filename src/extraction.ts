@@ -56,7 +56,8 @@ export function inspectPage(request: InspectRequest): InspectResult {
         if (element.hasAttribute('hidden') || style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse' || style.contentVisibility === 'hidden') stop('非表示の表は取得できません。表示された表を選んでください。');
       }
       if (table.querySelector('form, input, select, textarea, button')) stop('入力部品を含む表は取得しません。入力欄のない表を選んでください。');
-      if (table.querySelector('[rowspan], [colspan]')) stop('結合セル（rowspan・colspan）のある表には対応していません。');
+      const spanningCells = table.querySelectorAll<HTMLTableCellElement>('th[rowspan], th[colspan], td[rowspan], td[colspan]');
+      if (Array.from(spanningCells).some(cell => cell.rowSpan !== 1 || cell.colSpan !== 1)) stop('結合セル（rowspan・colspan）のある表には対応していません。');
       const heads = table.querySelectorAll('thead');
       if (heads.length > 1 || (heads[0] && heads[0].querySelectorAll('tr').length !== 1)) stop('見出しは最初の1行だけの表に対応しています。');
       const rows = Array.from(table.rows);
