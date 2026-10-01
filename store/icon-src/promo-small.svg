@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="440" height="280" viewBox="0 0 440 280">
+  <!--
+    Chrome Web Store small promo tile (440x280, opaque).
+    Centered stack: the icon mark on top, the product name and edition below.
+    Text stays well inside the tile (wide left/right margins) because the store may show it scaled down.
+  -->
+  <rect width="440" height="280" fill="#eaf0fa"/>
+  <circle cx="220" cy="86" r="66" fill="#d5e4f7"/>
+
+  <!-- Same artwork as icon.svg; its 16..112 art box is drawn 120px wide, centered at x=220. -->
+  <image href="icon.svg" xlink:href="icon.svg" x="140" y="6" width="160" height="160"/>
+
+  <g fill="#123e72" text-anchor="middle" font-family="system-ui, -apple-system, BlinkMacSystemFont, 'Hiragino Kaku Gothic ProN', 'Yu Gothic', sans-serif">
+    <text x="220" y="204" font-size="28" font-weight="700">Webページ → CSV</text>
+    <text x="220" y="240" font-size="19" font-weight="600">(無料ローカル版)</text>
+  </g>
+</svg>

@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>取引一覧（見本・架空データ）</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: "Hiragino Sans", "Yu Gothic UI", "Meiryo", "Noto Sans JP", sans-serif; color: #1f2d3d; background: #f3f6fa; }
+  .bar { background: #1d4f8c; color: #fff; padding: 14px 28px; font-size: 18px; font-weight: 700; }
+  .bar span { font-weight: 400; font-size: 13px; margin-left: 14px; opacity: .85; }
+  main { padding: 24px 28px; }
+  h1 { font-size: 22px; margin: 0 0 6px; }
+  .note { margin: 0 0 18px; font-size: 13px; color: #55657a; }
+  table { border-collapse: collapse; width: 100%; background: #fff; font-size: 14px; }
+  th, td { border: 1px solid #d5dde8; padding: 9px 12px; text-align: left; }
+  th { background: #e8eff8; color: #173a66; }
+  td.num, th.num { text-align: right; }
+  .foot { margin-top: 16px; font-size: 12px; color: #6a7a8e; }
+</style>
+</head>
+<body>
+  <div class="bar">見本商店 管理画面<span>すべて架空のデータです</span></div>
+  <main>
+    <h1>取引一覧</h1>
+    <p class="note">2026年10月の取引（見本）</p>
+    <table id="transactions">
+      <thead><tr><th>取引日</th><th>取引先</th><th>内容</th><th class="num">金額</th><th>状態</th></tr></thead>
+      <tbody>
+        <tr><td>2026/10/01</td><td>青空文具店</td><td>コピー用紙 5 冊</td><td class="num">¥3,850</td><td>入金済み</td></tr>
+        <tr><td>2026/10/02</td><td>みどり印刷</td><td>名刺 200 枚</td><td class="num">¥6,600</td><td>入金済み</td></tr>
+        <tr><td>2026/10/03</td><td>さくら運送</td><td>配送料（9月分）</td><td class="num">¥12,400</td><td>未入金</td></tr>
+        <tr><td>2026/10/05</td><td>北風電機</td><td>延長コード 3 本</td><td class="num">¥2,970</td><td>入金済み</td></tr>
+        <tr><td>2026/10/07</td><td>ひまわり食堂</td><td>会議用お弁当 8 個</td><td class="num">¥9,200</td><td>入金済み</td></tr>
+        <tr><td>2026/10/09</td><td>青空文具店</td><td>付箋・ペン 一式</td><td class="num">¥1,980</td><td>未入金</td></tr>
+        <tr><td>2026/10/12</td><td>みどり印刷</td><td>チラシ 500 枚</td><td class="num">¥14,300</td><td>入金済み</td></tr>
+        <tr><td>2026/10/14</td><td>さくら運送</td><td>配送料（10月前半）</td><td class="num">¥8,750</td><td>未入金</td></tr>
+      </tbody>
+    </table>
+    <p class="foot">表示件数：8 件</p>
+  </main>
+</body>
+</html>
