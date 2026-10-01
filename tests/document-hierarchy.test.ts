@@ -226,7 +226,7 @@ test('document hierarchy: sidebar link positions do not displace the independent
 
 test('document hierarchy: hidden headings do not set the width and control values never enter the section body', () => withPage(
   '<main id="visible"><h1>表示文書</h1><h6 hidden>秘密の見出し</h6><p style="display:none">秘密の本文</p>'
-  + '<p>説明<span aria-hidden="true">隠れた補足</span></p><label>氏名<input value="SECRET-INPUT"></label>'
+  + '<p>説明<span style="display:none">隠れた補足</span></p><label>氏名<input value="SECRET-INPUT"></label>'
   + '<select><option selected>SECRET-SELECT</option></select><textarea>SECRET-TEXTAREA</textarea>'
   + '<div style="visibility:hidden"><h5>隠れた親</h5><p style="visibility:visible">再表示の本文</p></div></main>', () => {
     const observed = capture(describe('content:id:visible'));

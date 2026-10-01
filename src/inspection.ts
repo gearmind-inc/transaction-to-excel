@@ -1,5 +1,6 @@
 import { LIMITS, type Capture, type InspectRequest, type InspectResult, type TableCandidate } from './contracts';
 import type { PickerRequest, PickerResult } from './picker';
+import { countMatrixChars } from './text-budget';
 
 const validWarnings = (value: unknown): boolean => value === undefined || (Array.isArray(value) && value.length <= 50 && value.every(item => typeof item === 'string' && item.length > 0 && item.length <= 1000));
 const validSignature = (value: unknown): value is string => typeof value === 'string' && value.length > 0 && value.length <= 128 && !/[^A-Za-z0-9:_-]/.test(value);
@@ -41,12 +42,10 @@ export function acceptInspection(results: chrome.scripting.InjectionResult<Inspe
     const capture = data.capture as Capture | undefined;
     if (!capture || capture.schemaVersion !== 1 || capture.requestId !== request.requestId || capture.scope !== 'current-page' || capture.tableKey !== request.tableKey || !validHeaders(capture.headers) || JSON.stringify(capture.headers) !== JSON.stringify(request.headers) || !Array.isArray(capture.sourceIndexes) || !capture.sourceIndexes.length || capture.sourceIndexes.length > capture.headers.length || capture.sourceIndexes.some(index => !Number.isSafeInteger(index) || index < 0 || index >= capture.headers.length) || new Set(capture.sourceIndexes).size !== capture.sourceIndexes.length || JSON.stringify(capture.sourceIndexes) !== JSON.stringify(request.sourceIndexes) || !Array.isArray(capture.rows) || capture.rows.length > LIMITS.rows || typeof capture.capturedAt !== 'string' || !Number.isFinite(Date.parse(capture.capturedAt))) throw new Error('取得の範囲・件数・列が一致しません。');
     if (!validLayout(capture.layout) || capture.layout !== request.layout || request.kind !== 'content' && capture.layout !== undefined || capture.layout === 'composite' && !compositeHeaders(capture.headers)) throw new Error('選択した範囲の列構成が変わりました。範囲を選び直してください。');
-    let chars = 0;
     for (const row of capture.rows) {
       if (!Array.isArray(row) || row.length !== capture.sourceIndexes.length || !row.every(validText)) throw new Error('取得した行の構造が不正です。');
-      for (const value of row) chars += value.length;
     }
-    if (chars > LIMITS.textChars) throw new Error('取得文字数の上限を超えました。');
+    if (countMatrixChars(capture.headers, capture.rows) > LIMITS.textChars) throw new Error('取得文字数の上限を超えました。');
     if (!validWarnings(capture.warnings) || request.kind === 'content' && (!validSignature(capture.contentSignature) || capture.contentSignature !== request.contentSignature)) throw new Error('選択した本文の見出しか取得範囲が変わりました。範囲を選び直してください。');
   }
   return { data, documentId: result.documentId };

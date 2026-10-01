@@ -13,17 +13,19 @@ button { color: #123e72; background: #f8fafc; cursor: pointer; }
 button:hover:enabled { background: #e7eff9; } button:disabled { opacity: .5; cursor: default; }
 button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible { outline: 3px solid #4478ce; outline-offset: 2px; }
 #pick, #save { background: #185c98; color: white; border-color: #185c98; }
-.actions, .column-main, .conversion { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin: 12px 0; }
+.actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
 label { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 fieldset { min-width: 0; border: 1px solid #ccd7e4; border-radius: 8px; padding: 12px; margin: 12px 0; }
 legend { max-width: 100%; overflow-wrap: anywhere; font-weight: 600; }
-.column-main input[type=text] { width: 210px; }
-.table-wrap { overflow: auto; max-height: 540px; min-height: 0; }
+.table-wrap { overflow: auto; max-height: 60vh; min-height: 0; border: 1px solid #d3dce6; border-radius: 6px; }
 .table-wrap[aria-busy=true] { opacity: .55; }
 table { border-collapse: collapse; width: 100%; font-size: 14px; }
 th, td { border: 1px solid #d3dce6; padding: 8px 10px; vertical-align: top; min-width: 150px; }
 th { background: #eaf0f7; position: sticky; top: 0; z-index: 1; text-align: left; }
-td:first-child, th:first-child { min-width: 54px; }
+td:first-child, th:first-child { min-width: 90px; font-size: 11px; }
+.row-hide { display: block; font-size: 11px; padding: 2px 5px; margin-top: 6px; }
+.drop-target { outline: 3px solid #4478ce; outline-offset: -3px; background: #dbeafb; }
+th[draggable=true] { cursor: grab; }
 .cell-line { white-space: pre-wrap; overflow-wrap: anywhere; margin: 3px 0; }
 .cell-value { white-space: pre-wrap; overflow-wrap: anywhere; }
 .cell-more { font-size: 11px; padding: 2px 5px; margin-top: 6px; }
@@ -31,8 +33,14 @@ td:first-child, th:first-child { min-width: 54px; }
 .column-heading { display: block; text-align: left; width: 100%; padding: 4px; border: 0; background: transparent; overflow-wrap: anywhere; }
 .column-type { display: block; color: #66758a; font-size: 11px; font-weight: 400; }
 #column-editor, #cell-detail { padding: 12px; border: 1px solid #a8b6c7; border-radius: 8px; margin-top: 12px; background: #f8fafc; }
-#hidden-columns { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding-top: 10px; }
-#hidden-columns button { font-size: 12px; padding: 3px 8px; }
+#hidden-columns, #hidden-rows { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding-top: 10px; font-size: 12px; }
+#hidden-columns button, #hidden-rows button { font-size: 12px; padding: 3px 8px; }
+.operation-help { font-size: 12px; color: #405269; }
+.source-options { padding: 8px 10px; margin: 8px 0; font-size: 12px; }
+.source-options .actions button { font-size: 12px; }
+.edit-actions button { padding: 5px 9px; font-size: 13px; }
+.source-section, .save-section { padding-top: 12px; padding-bottom: 12px; }
+.preview-section { border-color: #9ab3ce; }
 .auxiliary button, .selection-help, #coverage, #range-notice, #summary, #page, #save-status, #table-help { font-size: 12px; }
 .has-preview .selection-help { display: none; }
 #range-notice:empty, #header-notice:empty { display: none; }
@@ -47,12 +55,14 @@ summary { cursor: pointer; font-weight: 600; }
   header, main { padding: 12px; } section, details { padding: 12px; }
   h1 { font-size: 24px; } h2 { font-size: 18px; }
   .actions { align-items: stretch; gap: 8px; }
-  .actions > button, .actions > label, .column-main > label, .conversion > label { width: 100%; }
+  .actions > label { width: 100%; }
   label { min-width: 0; } label > select, label > input[type=text] { width: 100%; min-width: 0; }
   #columns input[type=text] { width: 100%; }
-  #preview { max-height: 460px; }
+  #preview { max-height: 55vh; }
   .source-section .actions > button { width: auto; flex: 1 1 120px; }
-  #column-editor .actions > button { width: auto; flex: 1 1 90px; }
+  #column-editor .actions > button { width: auto; flex: 1 1 70px; }
+  #column-editor h3 { font-size: 14px; }
+  #column-editor label { display: flex; }
   .confirm { align-items: flex-start; }
   .confirm input { flex: 0 0 auto; margin-top: 4px; }
 }
