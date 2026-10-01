@@ -74,7 +74,9 @@ Hand-authored fixtures/expectations and independent CSV reader: tests/fixtures a
 
 Local results: 232 automated assertions, TypeScript check, build, and seven isolated browser scenarios pass. Chrome for Testing 153.0.8010.12 on macOS 26.4.1 (Apple M4 Max, 64 GiB) saved the exact 476-byte oracle CSV. Twenty fixed 1,000-row × 30-column trials were below 3 seconds (95th percentile 282.3 ms, maximum 1,412.8 ms); not a guarantee for other machines.
 
-Browser automation uses a temporary isolated copy with **test-only loopback host permission** for injection/worker/UI. Production has no host permission. This does not prove activeTab or native Save As; normal Chrome is separate evidence. CI runs the same automated checks on Linux/Windows/macOS, not Excel or business acceptance. The PR records actual CI results and release-readiness score. Normal desktop Chrome, Excel, real sites and business acceptance remain unverified gates.
+Browser automation uses a temporary isolated copy with **test-only loopback host permission** for injection/worker/UI. Production has no host permission. This does not prove activeTab or native Save As; normal Chrome is separate evidence. CI passed the same automated checks on Linux/Windows/macOS, not Excel or business acceptance. The PR records actual CI results and release-readiness score.
+
+For normal macOS Chrome, the production build was loaded and toolbar-to-workspace opening was observed. On 2026-10-01, the operator reported successful save and cancellation after following the synthetic fixture's capture/preview/save/reload/cancel steps. This is **operator-reported evidence**, not independently observed CSV bytes or an Excel import. The running desktop Chrome version was not recorded. Normal Windows Chrome, Excel import on both OSes, authorized real-site comparison and business acceptance remain unverified release gates; no universal Chrome/site compatibility is claimed.
 
 ## Privacy and scope
 
