@@ -11,5 +11,5 @@ await mkdir('dist/extension/icons', { recursive: true });
 await build({ entryPoints: ['src/background.ts', 'src/workspace.ts', 'src/worker.ts'], outdir: 'dist/extension', bundle: true, format: 'esm', target: 'chrome116', legalComments: 'none' });
 for (const file of ['manifest.json', 'workspace.html', 'workspace.css']) await copyFile(file, `dist/extension/${file}`);
 for (const file of ['icon16.png', 'icon48.png', 'icon128.png']) await copyFile(`icons/${file}`, `dist/extension/icons/${file}`);
-for (const file of ['README.md', 'PRIVACY.md']) await copyFile(file, `dist/extension/${file}`);
+for (const file of ['README.md', 'PRIVACY.md', 'LICENSE']) await copyFile(file, `dist/extension/${file}`);
 console.log('Built unpacked MV3 extension: dist/extension');

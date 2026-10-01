@@ -28,7 +28,7 @@ Turn a table or text selected on a web page into a table, let the user review an
 |---|---|---|
 | `activeTab` | ツールバーのボタンを押したタブに限り、一時的にアクセスするためです。そのタブの URL を読んで HTTP/HTTPS のページか確かめ、`scripting` で範囲を選ぶ・読む処理を実行します。 | `src/workspace.ts` の `scan` (`chrome.tabs.get`) と `inject` / `pick` |
 | `scripting` | 利用者がボタンを押したタブの最上位の文書で、同梱の関数を実行するためです。表の候補の見出しと件数を読む、ページ上で範囲を選ぶ、選んだ範囲を強調表示する、選んだ範囲の表示されている文字を読む、の 4 つに使います。 | `src/workspace.ts` の `inject` / `pick` / `stopPicker` (`chrome.scripting.executeScript`)。実行する関数は `src/extraction.ts` の `inspectPage` と `src/picker.ts` の `pickRegion` / `cancelRegion` |
-| `storage` | ウィンドウごとのツールバー操作の記録 (タブ ID とランダムな ID) を `chrome.storage.session` に、最後の保存の試行の記録 (出力 ID、SHA-256 ダイジェスト、日時、ダウンロード ID、状態、理由コード) を `chrome.storage.local` に置くためです。 | `src/background.ts` (`chrome.storage.session.set`)、`src/panel-source.ts` の `watchPanelSource`、`src/chrome-ports.ts` の `chromeSavePort` |
+| `storage` | ウィンドウごとのツールバー操作の記録 (タブ ID とランダムな ID) を `chrome.storage.session` に、最後に始めた保存の試行の記録 (出力 ID、SHA-256 ダイジェスト、日時、ダウンロード ID、状態、理由コード) を `chrome.storage.local` に置くためです。 | `src/background.ts` (`chrome.storage.session.set`)、`src/panel-source.ts` の `watchPanelSource`、`src/chrome-ports.ts` の `chromeSavePort` |
 | `downloads` | 利用者が確認した CSV を、Chrome の保存画面で選んだ場所へ保存し、その保存の結果 (完了・取消・中断) を記録したダウンロード ID だけで照会するためです。保存中の取消の要求にも使います。 | `src/chrome-ports.ts` の `chromeSavePort` (`download` / `search` / `cancel` / `onChanged`) |
 | `sidePanel` | ツールバーのボタンを押したときに、今のページの横に操作画面 (サイドパネル) を開くためです。 | `src/background.ts` (`chrome.sidePanel.open`)、manifest の `side_panel` |
 
@@ -36,7 +36,7 @@ Turn a table or text selected on a web page into a table, let the user review an
 
 - `activeTab`: Temporarily access only the tab where the user clicks the toolbar button. The extension reads that tab's URL to confirm it is an HTTP/HTTPS page and runs the range selection and reading through `scripting`.
 - `scripting`: Run bundled functions in the top-level document of the tab where the user clicked the button: read table candidates' headers and counts, let the user select a range on the page, highlight the selected range, and read the visible text of the selected range.
-- `storage`: Keep a per-window toolbar activation (tab ID and a random ID) in `chrome.storage.session`, and the latest save-attempt record (export ID, SHA-256 digest, timestamp, download ID, state and reason code) in `chrome.storage.local`.
+- `storage`: Keep a per-window toolbar activation (tab ID and a random ID) in `chrome.storage.session`, and the record of the most recently started save attempt (export ID, SHA-256 digest, timestamp, download ID, state and reason code) in `chrome.storage.local`. A new save writes its record before the download begins, replacing the previous one.
 - `downloads`: Save the CSV the user confirmed to the location chosen in Chrome's Save dialog, and check that save's result (complete, cancelled or interrupted) by its recorded download ID only. It is also used to request cancellation of an in-progress save.
 - `sidePanel`: Open the controls in the side panel beside the current page when the user clicks the toolbar button.
 
@@ -60,7 +60,7 @@ The extension does not load external scripts. The functions it runs in pages are
 | 上の文字に含まれ得る氏名・ID・口座番号・取引の日付や金額・メッセージなど | 同上 | しない | 個人を特定できる情報、金融・支払いに関する情報、個人的な通信など、該当する各区分 |
 | ボタンを押したタブの URL (確認用。パネルにはオリジンだけを表示) | パネルのメモリだけ。保存しない | しない | ウェブ閲覧の情報に関する区分 |
 | 利用者が付けた列名、表の編集の内容、生成した CSV | パネルのメモリ。CSV は利用者が選んだフォルダ | しない | 利用者が作成したコンテンツに関する区分 (該当するかは画面の定義で判断) |
-| 保存の試行の記録 (出力 ID、ダイジェスト、日時、ダウンロード ID、状態、理由コード) | `chrome.storage.local` (1 件。次の保存で置き換え) | しない | 該当する区分を画面の定義で判断 |
+| 保存の試行の記録 (出力 ID、ダイジェスト、日時、ダウンロード ID、状態、理由コード) | `chrome.storage.local` (1 件。次の保存を始めると、ダウンロードの前に置き換わる。前の保存の結果が未確定なら、照合するまで新しい保存はできず、記録は残る) | しない | 該当する区分を画面の定義で判断 |
 | 以前の版で保存した設定 (名前、取得元のオリジンとパス、見出し、列の設定)。この版では読み書きしない | `chrome.storage.local` に残っている場合がある | しない | ウェブ閲覧の情報に関する区分 |
 | 照合のために利用者が選んだ CSV ファイル | パネルのメモリでダイジェストを計算するだけ。保存しない | しない | ウェブサイトのコンテンツ (CSV の中身はページから取り込んだ文字のため) |
 
@@ -84,7 +84,7 @@ The extension does not load external scripts. The functions it runs in pages are
 ### 提出物
 
 - [ ] この準備の PR をマージした後の main で zip を作る。作業場所で試しに作った zip は使わない。コマンドの例: `git switch main && git pull && npm ci --ignore-scripts && npm run check && npm run package` (出力: `dist/transaction-to-excel-0.1.0.zip`)
-- [ ] zip の中身を `unzip -l dist/transaction-to-excel-0.1.0.zip` で確かめる。`manifest.json` がフォルダに入らず直下にあること、`background.js` `workspace.js` `worker.js` `workspace.html` `workspace.css` `icons/` があること、`src/` `tests/` `node_modules/`、ソースマップ、内部文書が入っていないこと
+- [ ] zip の中身を `unzip -l dist/transaction-to-excel-0.1.0.zip` で確かめる。`manifest.json` がフォルダに入らず直下にあること、`background.js` `workspace.js` `worker.js` `workspace.html` `workspace.css` `icons/` `README.md` `PRIVACY.md` `LICENSE` があること、`src/` `tests/` `node_modules/`、ソースマップ、内部文書が入っていないこと
 - [ ] `store/screenshots/` の PNG を差し替え後の最新版で確かめる。1280x800 か 640x400、1〜5 枚、余白なし。Playwright で撮った本物の画面だけで、今の画面と一致し、個人情報・実在の URL・他の拡張機能が写っていないこと
 - [ ] アイコン (`icons/icon128.png`) と小さい宣伝画像 (`store/promo/small-440x280.png`) の大きさを確かめる
 
@@ -93,7 +93,7 @@ The extension does not load external scripts. The functions it runs in pages are
 - [ ] 日本語の掲載本文と画像を登録する。短い説明は 132 文字以下で、manifest の `description` と一字一句同じにする。各欄の上限と掲載結果は実画面で確かめる
 - [ ] カテゴリと言語を実画面の選択肢で決める ([listing.md](listing.md) の案)
 - [ ] データ種別と Limited Use の宣誓欄を実画面で確かめ、PRIVACY.md と一致する申告を登録する
-- [ ] 保存データの保護が Chrome ウェブストアの要件を満たすか確かめる。User Data FAQ の暗号化の項 (2026-10-02 確認) には、保存時 (at rest) に RSA や AES などの強い暗号を使うことが書かれている。この拡張機能は `chrome.storage.local` の記録 (保存の試行の記録、以前の版の設定) を独自に暗号化していないため、端末内に置くだけで適合すると判断せず、必要なら Chrome ウェブストアに問い合わせる。適合しない場合は、実装で対応した後に確かめ直す
+- [ ] 保存データの保護が Chrome ウェブストアの要件を満たすか確かめる。[User Data FAQ](https://developer.chrome.com/docs/webstore/program-policies/user-data-faq) の暗号化の項 (2026-10-02 確認) は、必要な暗号の種類として「transmit user data over a secure connection (e.g. HTTPS, WSS) and stored at rest using a strong encryption method such as RSA or AES」と書いている。一方、すべてのデータを暗号化する必要があるかの問いには「a minimum requirement of encrypting transmissions of all user data」と答えている。この拡張機能は `chrome.storage.local` の記録 (保存の試行の記録、以前の版の設定) を独自に暗号化していないため、端末内に置くだけで適合すると判断せず、必要なら Chrome ウェブストアに問い合わせる。適合しない場合は、実装で対応した後に確かめ直す
 - [ ] 提供者・連絡先・取引者 (trader) の情報を登録し、公開される情報をプレビューで確かめる
 
 ### 公開の判断 (ユーザーの作業)

@@ -6,11 +6,12 @@ import { createServer } from 'node:http';
 import { setTimeout as delay } from 'node:timers/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { chromium } from 'playwright';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '../..');
+// Playwright resolves its browser folder when it is loaded, so set the path before importing it.
 process.env.PLAYWRIGHT_BROWSERS_PATH ??= path.join(root, 'node_modules', '.cache', 'ms-playwright');
+const { chromium } = await import('@playwright/test');
 const rawArg = process.argv[2];
 if (!rawArg) throw new Error('Usage: node store/screenshots/capture.mjs <scratch output directory>');
 

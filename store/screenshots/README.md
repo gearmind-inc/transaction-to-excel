@@ -21,6 +21,7 @@ Chrome ウェブストアに載せる 1280x800 の PNG が 3 枚あります。�
 ## 前提
 
 - リポジトリ直下で作業すること。`node_modules` と Playwright の Chromium が入っていること (撮影のための再インストールはしません。Chromium が無いときだけ `PLAYWRIGHT_BROWSERS_PATH=node_modules/.cache/ms-playwright npx playwright install chromium`)。
+- 2 つのスクリプトは、devDependencies の `@playwright/test` を使います。ブラウザは、環境変数 `PLAYWRIGHT_BROWSERS_PATH` が無ければ `node_modules/.cache/ms-playwright` から探します。
 - `npm run build` で `dist/extension` ができること。
 - 空いているローカルのポートを 1 つ使えること (スクリプトが空きポートを選び、撮影後に閉じます)。
 - 日本語フォントがあること (macOS ならヒラギノ角ゴシック。Windows なら Yu Gothic や Meiryo)。
