@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="ja">
+<head><meta charset="utf-8"><title>表示中の本文と表</title></head>
+<body>
+  <nav id="navigation">表示中のナビゲーション<button id="menu-action" type="button">メニューを開く</button></nav>
+  <main id="manual">
+    <h1>出力の手順</h1>
+    <section id="notes-section">
+      <h2>必要な準備</h2>
+      <p id="notes-paragraph">表示中の説明。<a id="source-link" href="#destination">参照先のリンク</a>もあります。</p>
+      <p hidden>表示されていない説明</p>
+    </section>
+    <section id="table-section">
+      <h2>取引の例</h2>
+      <table id="transactions">
+        <thead><tr><th>日付</th><th>内容</th></tr></thead>
+        <tbody><tr><td>2026-10-01</td><td><a id="cell-link" href="#destination"><span id="table-leaf">表の中のリンク</span></a></td></tr></tbody>
+      </table>
+    </section>
+    <article id="details"><h2>補足</h2><p>複数行の説明。<br>次の行も保持します。</p><pre>example --output file.csv</pre></article>
+    <div id="card"><p>画面上のカードの内容</p></div>
+    <p id="destination">参照先</p>
+    <form id="login"><label>パスワード<input id="password" type="password" value="do-not-read-password"></label></form>
+  </main>
+</body>
+</html>

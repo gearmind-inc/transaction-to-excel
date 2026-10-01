@@ -2,51 +2,57 @@
 <html lang="ja">
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>取引表 → CSV</title><link rel="stylesheet" href="workspace.css">
+  <title>Webページ → CSV</title><link rel="stylesheet" href="workspace.css">
 </head>
 <body>
-  <header><span class="badge">無料・ローカル MVP</span><h1>取引表をCSVへ</h1>
-    <p>現在ページの選択した表だけを読みます。次ページの取得やログイン操作はしません。</p>
-    <p class="notice">取引とCSVはこの画面のメモリだけで扱います。画面を閉じる・再読み込みする場合は再取得が必要です。</p>
-  </header>
+  <header><h1>このページをCSVへ</h1></header>
   <main>
     <p id="status" role="status" aria-live="polite">準備中です。</p>
-    <section aria-labelledby="source-heading"><h2 id="source-heading">1. 表を選ぶ</h2>
+    <section class="source-section" aria-labelledby="source-heading"><h2 id="source-heading">ページの範囲を選ぶ</h2>
       <p id="source">元のページを確認中です。</p>
-      <div class="actions"><button id="scan">表を探し直す</button><button id="show-source" disabled>元のページで表を確認</button></div>
-      <label>取得する表 <select id="table" disabled><option>表を確認してください</option></select></label>
+      <div class="actions"><button id="pick" disabled>ページ上で範囲を選ぶ</button><button id="page-content" disabled>ページ全体を使う</button></div>
+      <p class="selection-help">ページにマウスを重ねてクリックすると、その範囲を表にします。↑で広げる、↓で戻す、Escで取消。</p>
+      <div class="actions auxiliary"><button id="capture" disabled>元ページから読み直す</button><button id="show-source" disabled>選んだ範囲を確認</button><button id="stop" disabled>処理を中止</button></div>
+      <p id="range-notice" role="status"></p>
+      <details><summary>取り込み方法・表の一覧</summary>
+        <label>範囲の選び方 <select id="pick-kind"><option value="auto">表の中では表全体を選ぶ</option><option value="content">表の一部も範囲に選ぶ</option></select></label>
+        <div class="actions"><button id="use-content" disabled>この範囲の表示内容から表にする</button></div>
+        <div class="actions"><button id="scan">ページを確認し直す</button></div>
+        <label>取得する表 <select id="table" disabled><option>表を確認してください</option></select></label>
+      </details>
       <p id="coverage">取得範囲：現在ページの選択した表のみ</p>
     </section>
-    <section aria-labelledby="preset-heading"><h2 id="preset-heading">保存した設定</h2>
-      <p>設定だけをこのChromeに保存します。表と列の構造が一致する場合だけ使えます。</p>
-      <div class="actions"><label>設定 <select id="preset"><option value="">新しい設定</option></select></label>
-        <button id="apply-preset">選んだ設定を使う</button><button id="delete-preset">選んだ設定を削除</button></div>
-      <div class="actions"><label>設定名 <input id="preset-name" maxlength="100" placeholder="例：今月の入出金"></label><button id="save-preset" disabled>この設定を保存</button></div>
-      <p id="preset-status" role="status"></p>
-    </section>
-    <section aria-labelledby="columns-heading"><h2 id="columns-heading">2. 列と変換を設定する</h2>
-      <p>標準は文字列のままです。日付・金額に変換する列だけ、入力の書式を指定してください。空白を自動で削りません。</p>
-      <div id="columns"></div>
-      <div class="actions"><button id="capture" disabled>選んだ列を取得してプレビュー</button><button id="refresh-preview" disabled>設定を反映してプレビュー</button><button id="stop" disabled>処理を中止</button></div>
-    </section>
-    <section aria-labelledby="preview-heading"><h2 id="preview-heading">3. 値と件数を確認する</h2>
+    <section class="preview-section" aria-labelledby="preview-heading"><h2 id="preview-heading">取り込んだ表</h2>
+      <p id="table-help">範囲を選ぶと表を表示します。列の見出しを押すと、名前・順番・型・省く列を調整できます。</p>
       <p id="summary">まだ取得していません。</p>
       <p id="header-notice"></p>
+      <div id="hidden-columns" hidden></div>
+      <div id="columns"><div id="column-editor" hidden></div></div>
       <div id="preview" class="table-wrap"></div>
+      <div id="cell-detail" hidden></div>
       <div class="actions"><button id="previous" disabled>前の100件</button><span id="page"></span><button id="next" disabled>次の100件</button></div>
-      <label class="confirm"><input id="confirm" type="checkbox" disabled><span id="confirm-label">このプレビューを確認しました</span></label>
+      <label class="confirm"><input id="confirm" type="checkbox" disabled><span id="confirm-label">この表を確認しました</span></label>
       <div class="actions"><button id="save" disabled>確認したCSVを保存</button><button id="cancel-save" disabled>保存の取消を要求</button><button id="reconcile">保存結果を照合</button></div>
       <p id="save-status" role="status" aria-live="polite">保存はまだ開始していません。</p>
       <div id="verify-file" hidden><label>結果不明のCSVが保存されている場合、同じファイルか照合できます。<input id="file" type="file" accept=".csv,text/csv"></label></div>
       <p>同期されないローカルフォルダを選んでください。保存完了はExcelでの取り込み確認とは別です。不明な場合は自動で再保存しません。</p>
     </section>
+    <details><summary>保存した設定</summary>
+      <p>設定だけをこのChromeに保存します。範囲と列の構造が一致する場合だけ使えます。</p>
+      <div class="actions"><label>設定 <select id="preset"><option value="">新しい設定</option></select></label>
+        <button id="apply-preset">選んだ設定を使う</button><button id="delete-preset">選んだ設定を削除</button></div>
+      <div class="actions"><label>設定名 <input id="preset-name" maxlength="100" placeholder="例：今月の入出金"></label><button id="save-preset" disabled>この設定を保存</button></div>
+      <p id="preset-status" role="status"></p>
+    </details>
     <details><summary>Excelへの取り込みと、この版の対応範囲</summary>
+      <p>取引とCSVはこの画面のメモリだけで扱います。画面を閉じる・再読み込みする場合は再取得が必要です。</p>
       <ol><li>Excelの「データ」から「テキストまたはCSVから」を選びます。</li>
         <li>UTF-8とカンマ区切りを指定します。</li><li>変換画面で自動の型変更を確認・解除し、ID・電話番号・式に見える値は、変換前に文字列型へ指定します。</li>
         <li>金額の精度、日付の月日順・地域を指定します。15桁を超える数値は、桁を保つ場合は文字列で取り込みます。</li>
         <li>先頭ゼロ・長いID・日付・金額・件数を元ページと照合します。式に見える文字列には保護用タブが加わります。その扱いも確認してください。</li></ol>
       <p>CSVにはExcelの書式・数式・セル型を保存できません。直接開くとID等が自動変換されることがあります。Excelで編集してCSVへ保存し直した後の数式保護は保証しません。画面名はExcelの版で異なります。</p>
-      <p>通常HTML表だけに対応します。結合セル・入れ子表・入力部品のある表・複数行見出し・iframe・Shadow DOM・仮想一覧は対象外です。表の先頭一行を見出し、残りをデータ（tfootを含む）として読みます。</p>
+      <p>表は見出しと列の配置から、カードや一覧は繰り返す項目から行と列に変換します。文章は見出しと内容を段落ごとに取り込みます。異なる表や文章を選んだ場合は、見出しも含めて元の順に縦につなぎ、足りない列を空欄にします。この場合は文字列と空欄をそのまま保持します。</p>
+      <p>画像やグラフの線から数値は推測しません。入力値、非表示、未読込部分、iframe・Shadow DOMの内部は取り込まず、選択後に取得できない部分を案内します。</p>
       <p>上限：5,000行・50列・1セル10,000文字・取得文字合計2,000,000文字。超過時は出力しません。これは処理性能を保証する件数ではありません。</p>
       <p>クラウド、共有、AI、API、Excelブック出力、重複台帳、取引の復旧はこの版にありません。同じ値の別取引を削除せず、過去の出力との重複も自動判定しません。</p>
     </details>

@@ -78,6 +78,14 @@ test('repeated and empty source headers remain positional; output names may cont
   assert.deepEqual(api.validatePreset(value), value);
 });
 
+test('content range presets retain namespaced long IDs and bounded DOM paths', () => {
+  for (const key of ['content:id:' + 'a'.repeat(197), 'content:path:' + 'div:0/'.repeat(200), 'content:' + 'a'.repeat(9992)]) {
+    const value = fixture({ tableKey: key });
+    assert.deepEqual(api.validatePreset(value), value);
+  }
+  assert.throws(() => api.validatePreset(fixture({ tableKey: 'content:' + 'a'.repeat(9993) })));
+});
+
 const invalidMutations: Array<[string, (value: any) => unknown]> = [
   ['unknown preset properties / transaction samples', (p) => ({ ...p, rows: [['個人情報']] })],
   ['unknown column properties', (p) => { p.columns[0].raw = '取引サンプル'; return p; }],

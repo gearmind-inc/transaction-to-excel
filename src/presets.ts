@@ -96,27 +96,34 @@ function column(value: unknown, headerCount: number): ColumnConfig {
 
 /** Strictly allowlist only MVP settings and return a detached snapshot. */
 export function validatePreset(value: unknown): Preset {
-  const fields = object(value, PRESET_FIELDS, '設定');
+  const hasSignature = value !== null && typeof value === 'object' && Object.hasOwn(value, 'contentSignature');
+  const fields = object(value, hasSignature ? [...PRESET_FIELDS, 'contentSignature'] : PRESET_FIELDS, '設定');
   if (fields.schemaVersion !== 1) invalid('対応していない設定形式です');
   const id = identifier(fields.id);
   const version = integer(fields.version, '設定の版', 1, Number.MAX_SAFE_INTEGER);
   const name = text(fields.name, '設定の名前', 100);
   const sourceOrigin = origin(fields.origin);
   const sourcePath = path(fields.path, sourceOrigin);
-  const tableKey = text(fields.tableKey, '表の識別名', 200);
+  const tableKey = text(fields.tableKey, '範囲の識別名', typeof fields.tableKey === 'string' && fields.tableKey.startsWith('content:') ? LIMITS.cellChars : 200);
+  let contentSignature: string | undefined;
+  if (hasSignature) {
+    if (!tableKey.startsWith('content:') || typeof fields.contentSignature !== 'string' || !/^[A-Za-z0-9:_-]{1,128}$/.test(fields.contentSignature)) invalid('範囲の構造署名');
+    contentSignature = fields.contentSignature;
+  }
   if (!Array.isArray(fields.headers) || fields.headers.length < 1 || fields.headers.length > LIMITS.columns) invalid('表の見出し');
   const headers = Array.from(fields.headers, (header) => text(header, '表の見出し', LIMITS.cellChars, true));
   if (!Array.isArray(fields.columns) || fields.columns.length < 1 || fields.columns.length > headers.length) invalid('選択列の件数');
   const columns = Array.from(fields.columns, (entry) => column(entry, headers.length));
   if (new Set(columns.map((entry) => entry.sourceIndex)).size !== columns.length) invalid('取得列が重複しています');
   if (new Set(columns.map((entry) => entry.outputName)).size !== columns.length) invalid('出力列名が重複しています');
-  return { schemaVersion: 1, id, version, name, origin: sourceOrigin, path: sourcePath, tableKey, headers, columns };
+  return { schemaVersion: 1, id, version, name, origin: sourceOrigin, path: sourcePath, tableKey, headers, columns, ...(contentSignature ? { contentSignature } : {}) };
 }
 
 /** Reuse is manual and requires exact ordered headers, not a similar table. */
-export function matchesPreset(preset: Preset, sourceOrigin: string, sourcePath: string, tableKey: string, headers: string[]): boolean {
+export function matchesPreset(preset: Preset, sourceOrigin: string, sourcePath: string, tableKey: string, headers: string[], contentSignature?: string): boolean {
   return preset.origin === sourceOrigin && preset.path === sourcePath && preset.tableKey === tableKey
-    && preset.headers.length === headers.length && preset.headers.every((header, i) => header === headers[i]);
+    && preset.headers.length === headers.length && preset.headers.every((header, i) => header === headers[i])
+    && preset.contentSignature === contentSignature;
 }
 
 /** The Chrome adapter owns locking; this store never mutates a loaded value. */

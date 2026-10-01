@@ -132,6 +132,8 @@ function previewCell(raw: string, column: ColumnConfig): CellPreview {
 
 /** Columns use original table indexes; captured row positions may be different. */
 export function buildPreview(capture: Capture, columns: ColumnConfig[]): Preview {
+  if (capture.layout !== undefined && capture.layout !== 'composite') throw new Error('取得結果の配置が不正です。元ページから再取得してください。');
+  if (capture.layout === 'composite' && Array.isArray(columns) && columns.some(column => column && (column.kind !== 'text' || column.required))) throw new Error('複数の表や文章が混在する範囲は、文字列のまま、空欄を許可して出力してください。');
   if (capture.schemaVersion !== 1 || capture.scope !== 'current-page' || typeof capture.requestId !== 'string'
     || !Array.isArray(capture.headers) || capture.headers.length < 1 || capture.headers.length > LIMITS.columns
     || capture.headers.some(header => typeof header !== 'string' || header.length > LIMITS.cellChars)
