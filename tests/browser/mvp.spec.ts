@@ -137,6 +137,9 @@ test('real unpacked MV3: chosen table, explicit conversion, preview and saved CS
   const otherTab = await harness.context.newPage();
   await otherTab.goto(fixtureUrl);
   await otherTab.locator('#transactions tbody tr').first().locator('td').first().evaluate(cell => { cell.textContent = 'do-not-capture-other-tab'; });
+  // Linux may suspend animation frames in a background tab, blocking the
+  // click stability check. Resume the workspace the user is operating.
+  await workspace.bringToFront();
   await captureGolden(workspace);
   const displayed = await workspace.locator('#preview tbody tr').evaluateAll(rows => rows.map(row => Array.from(row.querySelectorAll('td')).slice(1).map(cell => cell.querySelector('.cell-value')?.textContent)));
   expect(displayed).toEqual(EXPECTED_PREVIEW.rows.map(row => row.map(cell => displayedValue(cell.logical))));
