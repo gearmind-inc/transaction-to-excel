@@ -3,9 +3,21 @@
   "name": "Webページ → CSV (無料ローカル版)",
   "version": "0.1.0",
   "description": "ページ上で選んだ表や文章をサイドパネルで確認し、必要な列をローカルCSVへ保存します。",
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
   "minimum_chrome_version": "116",
   "permissions": ["activeTab", "scripting", "storage", "downloads", "sidePanel"],
-  "action": { "default_title": "このページをCSVへ" },
+  "action": {
+    "default_title": "このページをCSVへ",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
   "side_panel": { "default_path": "workspace.html" },
   "background": { "service_worker": "background.js", "type": "module" },
   "content_security_policy": {

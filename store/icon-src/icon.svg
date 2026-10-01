@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <!--
+    48px and 128px icon: a page table flows into a CSV document.
+    The artwork spans exactly 16..112 on both axes (Chrome Web Store: 96x96 art, 16px transparent padding).
+    Outer edges sit on multiples of 8 units, which land on whole pixels at both 128px (1:1) and 48px (x0.375).
+    Every shape has a dark outline and a light fill so it stays visible on light and dark toolbars.
+  -->
+  <!-- CSV document: pale green sheet, dark outline, folded corner. Outer edge 64..112 x 16..112. -->
+  <path d="M66.5 18.5H96L109.5 32V109.5H66.5Z" fill="#dcf1e7" stroke="#123e72" stroke-width="5" stroke-linejoin="round"/>
+  <path d="M95 19v14.5h14" fill="none" stroke="#123e72" stroke-width="4" stroke-linejoin="round"/>
+  <rect x="86" y="48" width="16" height="5" fill="#0a6156"/>
+  <rect x="86" y="64" width="16" height="5" fill="#0a6156"/>
+  <rect x="86" y="80" width="16" height="5" fill="#0a6156"/>
+  <rect x="78" y="96" width="16" height="5" fill="#0a6156"/>
+
+  <!-- Page table: white body, blue header row, grid lines. Outer edge 16..56 x 32..96. -->
+  <rect x="18.5" y="34.5" width="35" height="59" rx="3" fill="#fff" stroke="#123e72" stroke-width="5"/>
+  <rect x="21" y="37" width="30" height="11" fill="#185c98"/>
+  <rect x="34" y="48" width="4" height="43" fill="#5479b8"/>
+  <rect x="21" y="62" width="30" height="4" fill="#5479b8"/>
+  <rect x="21" y="77" width="30" height="4" fill="#5479b8"/>
+
+  <!-- Green arrow bridging table and document, with a white halo so it reads over both outlines. -->
+  <path d="M46 57.5H64V48L82 64L64 80V70.5H46Z" fill="#0a6156" stroke="#fff" stroke-width="3" stroke-linejoin="round" paint-order="stroke"/>
+</svg>

@@ -103,3 +103,7 @@ Exact CI commits/results are recorded in the PR. Historical checks from earlier 
 ## Privacy and scope
 
 See [PRIVACY.md](PRIVACY.md). Only activeTab/scripting/storage/downloads/sidePanel. Page values, editing history and CSV stay in panel memory. storage.local holds minimal save metadata; old preset records may remain from earlier revisions. storage.session holds only a per-window toolbar activation (tab ID and random activation ID), with no URL or page text. No storage.sync or external product network path. Service-worker permanence is unnecessary. Internal specs/instructions remain local and are excluded from clones/distribution.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
