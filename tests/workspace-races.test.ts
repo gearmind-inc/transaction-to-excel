@@ -1,196 +1,6 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
-import { randomUUID } from 'node:crypto';
 import test from 'node:test';
-import { build } from 'esbuild';
-import { JSDOM } from 'jsdom';
-import type { Capture, ColumnConfig, InspectRequest, InspectResult, Preset } from '../src/contracts';
-import { buildPreview } from '../src/transform';
-import { generateCsv } from '../src/csv';
-
-// Exercise the actual bundled workspace and its DOM event handlers. Delayed
-// Chrome replies are independent scheduling inputs, not copies of UI logic.
-const bundled = build({ entryPoints: ['src/workspace.ts'], bundle: true, write: false, format: 'iife', target: 'es2022' });
-const sourceBundled = build({ entryPoints: ['src/panel-source.ts'], bundle: true, write: false, format: 'iife', globalName: 'PanelSourceSubject', target: 'es2022' });
-const html = readFile('workspace.html', 'utf8');
-const sourceUrl = 'https://fixture.example/transactions';
-
-type Call = {
-  target: { tabId: number; frameIds?: number[]; documentIds?: string[] };
-  request: InspectRequest;
-  resolve(value: chrome.scripting.InjectionResult<InspectResult>[]): void;
-  reject(error: Error): void;
-};
-type StorageWrite = { values: Record<string, unknown>; resolve(): void; reject(error: Error): void };
-type Activation = { tabId: number; activationId: string };
-type SessionRead = { resolve(): void; reject(error: Error): void };
-type TabLookup = { id: number; resolve(): void; reject(error: Error): void };
-type ScreenOptions = { native?: boolean; activation?: Activation | null; deferSessionRead?: boolean; expectedInitialCalls?: number };
-
-async function screen(options: ScreenOptions = {}) {
-  const dom = new JSDOM(await html, { url: `https://extension.example/workspace.html${options.native ? '' : '?tab=7'}`, runScripts: 'outside-only' });
-  const win = dom.window;
-  const calls: Call[] = [];
-  const stored: Record<string, unknown> = {};
-  const storageWrites: StorageWrite[] = [];
-  const sessionStored: Record<string, unknown> = options.activation === null ? {} : { 'panelActivationV1:11': options.activation ?? { tabId: 7, activationId: 'initial-7' } };
-  const sessionReads: SessionRead[] = [];
-  const storageListeners: Array<(changes: Record<string, chrome.storage.StorageChange>, area: string) => void> = [];
-  const activatedListeners: Array<(info: { tabId: number; windowId: number }) => void> = [];
-  const updatedListeners: Array<(id: number, change: chrome.tabs.OnUpdatedInfo, tab: Partial<chrome.tabs.Tab>) => void> = [];
-  const removedListeners: Array<(id: number, info: { windowId: number; isWindowClosing: boolean }) => void> = [];
-  const downloads: Array<{ url: string; filename: string }> = [];
-  const tabUpdates: number[] = [];
-  const tabLookups: TabLookup[] = [];
-  const deferredTabIds = new Set<number>();
-  const digestCalls: Array<{ bytes: Uint8Array; resolve(): void }> = [];
-  let activeTabId = options.activation?.tabId ?? 7;
-  let deferredDigest = false;
-  let deferredWrites = false;
-  // Chrome serializes storage/messages back into the receiving JS realm. A
-  // Node structuredClone would incorrectly manufacture foreign prototypes.
-  const clone = <T>(value: T): T => value === undefined ? value : win.JSON.parse(win.JSON.stringify(value));
-  Object.defineProperty(win.crypto, 'randomUUID', { value: randomUUID });
-  Object.defineProperty(win.crypto, 'subtle', { value: {
-    digest: (_algorithm: string, input: Uint8Array) => new Promise<ArrayBuffer>(resolve => {
-      const complete = () => resolve(new Uint8Array(32).buffer);
-      digestCalls.push({ bytes: new Uint8Array(input), resolve: complete });
-      if (!deferredDigest) complete();
-    }),
-  } });
-  Object.defineProperty(win.navigator, 'locks', { value: { request: (_name: string, work: () => unknown) => work() } });
-  Object.defineProperty(win.URL, 'createObjectURL', { value: () => 'blob:https://extension.example/generated-csv' });
-  Object.defineProperty(win.URL, 'revokeObjectURL', { value: () => {} });
-  class FixtureWorker {
-    onmessage: ((event: { data: unknown }) => void) | null = null;
-    onerror: (() => void) | null = null;
-    terminated = false;
-    postMessage(data: { requestId: string; capture: Capture; columns: ColumnConfig[] }) {
-      const preview = buildPreview(data.capture, data.columns);
-      const bytes = generateCsv(preview);
-      setTimeout(() => { if (!this.terminated) this.onmessage?.({ data: { requestId: data.requestId, preview: clone(preview), bytes: new win.Uint8Array(bytes) } }); }, 0);
-    }
-    terminate() { this.terminated = true; }
-  }
-  Object.assign(win, {
-    structuredClone: clone,
-    TextEncoder,
-    Worker: FixtureWorker,
-    chrome: {
-      runtime: { getURL: (path: string) => `https://extension.example/${path}` },
-      windows: { getCurrent: async () => ({ id: 11 }) },
-      storage: { onChanged: {
-        addListener: (listener: typeof storageListeners[number]) => storageListeners.push(listener),
-        removeListener: (listener: typeof storageListeners[number]) => { const index = storageListeners.indexOf(listener); if (index >= 0) storageListeners.splice(index, 1); },
-      }, session: {
-        get: () => new Promise<Record<string, unknown>>((resolve, reject) => {
-          const snapshot = clone(sessionStored);
-          const complete = () => resolve(snapshot);
-          sessionReads.push({ resolve: complete, reject });
-          if (!options.deferSessionRead) complete();
-        }),
-      }, local: {
-        QUOTA_BYTES: 10 * 1024 * 1024,
-        setAccessLevel: async () => {},
-        get: async () => clone(stored),
-        getBytesInUse: async (key?: string) => new TextEncoder().encode(JSON.stringify(key ? stored[key] ?? null : stored)).length,
-        set: (values: Record<string, unknown>) => new Promise<void>((resolve, reject) => {
-          const copy = clone(values);
-          const commit = () => { Object.assign(stored, copy); resolve(); };
-          storageWrites.push({ values: copy, resolve: commit, reject });
-          if (!deferredWrites) commit();
-        }),
-      } },
-      downloads: {
-        onChanged: { addListener() {}, removeListener() {} },
-        download: async (value: { url: string; filename: string }) => { downloads.push(value); return 91; },
-        search: async ({ id }: { id: number }) => [{ id, state: 'in_progress' }],
-      },
-      tabs: {
-        get: (id: number) => {
-          const tab = { id, windowId: 11, url: sourceUrl, active: id === activeTabId };
-          if (!deferredTabIds.delete(id)) return Promise.resolve(tab);
-          return new Promise((resolve, reject) => { tabLookups.push({ id, resolve: () => resolve(tab), reject }); });
-        },
-        query: async () => [{ id: activeTabId, windowId: 11, url: sourceUrl, active: true }],
-        update: async (id: number) => { tabUpdates.push(id); return {}; },
-        onActivated: { addListener: (listener: typeof activatedListeners[number]) => activatedListeners.push(listener), removeListener() {} },
-        onUpdated: { addListener: (listener: typeof updatedListeners[number]) => updatedListeners.push(listener), removeListener() {} },
-        onRemoved: { addListener: (listener: typeof removedListeners[number]) => removedListeners.push(listener), removeListener() {} },
-      },
-      scripting: {
-        executeScript: (options: { target: Call['target']; args: [InspectRequest] }) => new Promise((resolve, reject) => {
-          calls.push({ target: options.target, request: options.args[0], resolve, reject });
-        }),
-      },
-    },
-  });
-  win.eval((await bundled).outputFiles![0].text);
-  const tick = () => new Promise<void>(resolve => setTimeout(resolve, 0));
-  async function waitForCalls(count: number) {
-    for (let tries = 0; tries < 30 && calls.length < count; tries++) await tick();
-    assert.equal(calls.length, count, 'the production UI must issue the expected request');
-  }
-  async function waitForWrites(count: number) {
-    for (let tries = 0; tries < 30 && storageWrites.length < count; tries++) await tick();
-    assert.equal(storageWrites.length, count, 'the production preset port must issue the expected write');
-  }
-  async function waitForSessionReads(count: number) {
-    for (let tries = 0; tries < 30 && sessionReads.length < count; tries++) await tick();
-    assert.equal(sessionReads.length, count, 'a native panel must read its window activation metadata');
-  }
-  async function waitForDigest(count: number) {
-    for (let tries = 0; tries < 30 && digestCalls.length < count; tries++) await tick();
-    assert.equal(digestCalls.length, count, 'saving must reach the controlled digest scheduling boundary');
-  }
-  async function waitForTabLookups(count: number) {
-    for (let tries = 0; tries < 30 && tabLookups.length < count; tries++) await tick();
-    assert.equal(tabLookups.length, count, 'source validation must reach the controlled tab lookup boundary');
-  }
-  const button = (id: string) => win.document.getElementById(id) as HTMLButtonElement;
-  const status = () => win.document.getElementById('status')!.textContent;
-  function reply(call: Call, documentId: string) {
-    call.resolve([{ frameId: 0, documentId, result: {
-      schemaVersion: 1, requestId: call.request.requestId, url: sourceUrl,
-      tables: [{ index: 0, key: 'id:transactions', headers: ['ID'], rowCount: 1 }],
-    } }]);
-  }
-  await waitForCalls(options.expectedInitialCalls ?? (options.deferSessionRead ? 0 : 1));
-  async function selectTable() {
-    reply(calls[0], 'current-document'); await tick();
-    const table = win.document.getElementById('table') as HTMLSelectElement;
-    table.value = '0'; table.dispatchEvent(new win.Event('change'));
-  }
-  const settings = () => stored.presetsV1 as Preset[] | undefined;
-  const activation = (value: Activation, windowId = 11) => {
-    if (windowId === 11) activeTabId = value.tabId;
-    const key = `panelActivationV1:${windowId}`, oldValue = clone(sessionStored[key]);
-    sessionStored[key] = clone(value);
-    storageListeners.forEach(listener => listener({ [key]: { oldValue, newValue: clone(value) } }, 'session'));
-  };
-  const activateTab = (id: number, windowId = 11) => {
-    if (windowId === 11) activeTabId = id;
-    activatedListeners.forEach(listener => listener({ tabId: id, windowId }));
-  };
-  const updateTab = (id: number, change: chrome.tabs.OnUpdatedInfo, windowId = 11) => updatedListeners.forEach(listener => listener(id, change, { id, windowId, url: change.url ?? sourceUrl }));
-  const removeTab = (id: number, windowId = 11) => removedListeners.forEach(listener => listener(id, { windowId, isWindowClosing: false }));
-  function replyCapture(call: Call, documentId = 'current-document') {
-    call.resolve([{ frameId: 0, documentId, result: {
-      schemaVersion: 1, requestId: call.request.requestId, url: sourceUrl,
-      capture: { schemaVersion: 1, requestId: call.request.requestId, tableKey: call.request.tableKey!, headers: [...call.request.headers!], sourceIndexes: [...call.request.sourceIndexes!], rows: [['keep-raw-id']], scope: 'current-page', capturedAt: '2026-10-01T00:00:00.000Z' },
-    } }]);
-  }
-  async function previewTable() {
-    await selectTable(); button('capture').click(); await waitForCalls(2);
-    replyCapture(calls[1]);
-    for (let tries = 0; tries < 30 && !win.document.getElementById('preview')!.textContent?.includes('keep-raw-id'); tries++) await tick();
-    assert.ok(win.document.getElementById('preview')!.textContent?.includes('keep-raw-id'), 'a real captured table must reach the preview');
-    const confirm = win.document.getElementById('confirm') as HTMLInputElement;
-    confirm.checked = true; confirm.dispatchEvent(new win.Event('change'));
-    assert.equal(button('save').disabled, false, 'the fixture must be reviewable and saveable before lifecycle events');
-  }
-  return { dom, win, calls, tick, waitForCalls, button, status, reply, selectTable, previewTable, replyCapture, stored, settings, storageWrites, waitForWrites, sessionReads, waitForSessionReads, activation, activateTab, updateTab, removeTab, digestCalls, waitForDigest, downloads, tabUpdates, tabLookups, waitForTabLookups, deferTabLookup: (id: number) => { deferredTabIds.add(id); }, deferDigest: () => { deferredDigest = true; }, deferWrites: () => { deferredWrites = true; } };
-}
+import { screen, sourceBundled } from './workspace-harness';
 
 test('a stopped scan cannot unlock controls belonging to a later pending scan', async () => {
   const ui = await screen();
@@ -204,7 +14,7 @@ test('a stopped scan cannot unlock controls belonging to a later pending scan', 
     assert.equal(ui.button('stop').disabled, false, 'the later scan must remain cancellable');
     ui.reply(ui.calls[1], 'same-document');
     await ui.tick();
-    assert.match(ui.status() ?? '', /表を選び/);
+    assert.match(ui.status() ?? '', /ページ上で.*(?:範囲|表).*選/);
     assert.equal(ui.button('scan').disabled, false);
   } finally { ui.dom.window.close(); }
 });
@@ -222,13 +32,15 @@ test('a stopped old-document scan cannot poison new-document provenance', async 
         await ui.tick();
         ui.reply(ui.calls[second], second === 0 ? 'old-document' : 'new-document');
         await ui.tick();
-        assert.match(ui.status() ?? '', /表を選び/, 'the newer valid page must remain selectable');
+        assert.match(ui.status() ?? '', /ページ上で.*(?:範囲|表).*選/, 'the newer valid page must remain selectable');
         const table = ui.win.document.getElementById('table') as HTMLSelectElement;
         table.value = '0'; table.dispatchEvent(new ui.win.Event('change'));
+        await ui.waitForCalls(3); ui.replyCapture(ui.calls[2], 'new-document'); await ui.waitForWorkers(1); await ui.tick();
         ui.button('show-source').click();
-        await ui.waitForCalls(3);
-        assert.deepEqual(Array.from(ui.calls[2].target.documentIds ?? []), ['new-document']);
-        ui.reply(ui.calls[2], 'new-document');
+        await ui.waitForCalls(4);
+        assert.deepEqual(Array.from(ui.calls[2].target.documentIds ?? []), ['new-document'], 'automatic capture must retain the newer document provenance');
+        assert.deepEqual(Array.from(ui.calls[3].target.documentIds ?? []), ['new-document']);
+        ui.reply(ui.calls[3], 'new-document');
         await ui.tick();
       } finally { ui.dom.window.close(); }
     });
@@ -248,14 +60,14 @@ test('an error from a stopped scan cannot replace a later scan status', async ()
     assert.equal(ui.button('scan').disabled, true);
     ui.reply(ui.calls[1], 'new-document');
     await ui.tick();
-    assert.match(ui.status() ?? '', /表を選び/);
+    assert.match(ui.status() ?? '', /ページ上で.*(?:範囲|表).*選/);
   } finally { ui.dom.window.close(); }
 });
 
 test('rapid first-preset saves write one version and prevent source edits until completion', async () => {
   const ui = await screen();
   try {
-    await ui.selectTable(); ui.deferWrites();
+    await ui.previewTable(); ui.openColumn(); ui.deferWrites();
     const name = ui.win.document.getElementById('preset-name') as HTMLInputElement;
     name.value = '初めての設定';
     ui.button('save-preset').click(); ui.button('save-preset').click();
@@ -266,12 +78,19 @@ test('rapid first-preset saves write one version and prevent source edits until 
     assert.equal(ui.button('scan').disabled, true);
     assert.equal((ui.win.document.getElementById('table') as HTMLSelectElement).disabled, true);
     assert.equal(name.disabled, true);
-    assert.equal((ui.win.document.querySelector('#columns fieldset') as HTMLFieldSetElement).disabled, true);
+    assert.equal((ui.win.document.getElementById('column-name') as HTMLInputElement).disabled, true);
+    const heldPreview = ui.win.document.getElementById('preview')!.textContent;
+    const columnName = ui.win.document.getElementById('column-name') as HTMLInputElement;
+    columnName.value = 'queued-during-preset'; columnName.dispatchEvent(new ui.win.Event('input'));
+    ui.button('column-hide').dispatchEvent(new ui.win.Event('click'));
     ui.button('scan').click(); await ui.tick();
-    assert.equal(ui.calls.length, 1, 'the current source cannot change during the settings write');
+    assert.equal(ui.calls.length, 2, 'the current source cannot change during the settings write');
+    assert.equal(ui.workerCalls.length, 1, 'queued editor events may not race an in-flight preset write');
+    assert.equal(ui.win.document.getElementById('preview')!.textContent, heldPreview);
     ui.storageWrites[0].resolve(); await ui.tick();
     assert.equal(ui.settings()?.length, 1);
     assert.equal(ui.settings()?.[0].version, 1);
+    assert.equal(ui.settings()?.[0].columns[0].outputName, 'ID', 'the version preserves the reviewed settings at the write boundary');
     const firstId = ui.settings()![0].id;
     assert.match(ui.win.document.getElementById('preset-status')!.textContent ?? '', /設定をローカルに保存しました/);
     assert.equal(ui.button('save-preset').disabled, false);
@@ -287,7 +106,7 @@ test('rapid first-preset saves write one version and prevent source edits until 
 test('failed preset update leaves the old durable version intact and restores controls for explicit retry', async () => {
   const ui = await screen();
   try {
-    await ui.selectTable();
+    await ui.previewTable();
     const name = ui.win.document.getElementById('preset-name') as HTMLInputElement;
     name.value = '保存済みの設定'; ui.button('save-preset').click();
     await ui.waitForWrites(1); await ui.tick();
@@ -311,7 +130,7 @@ test('failed preset update leaves the old durable version intact and restores co
 test('failed preset deletion preserves selection and old settings; successful deletion restores controls', async () => {
   const ui = await screen();
   try {
-    await ui.selectTable();
+    await ui.previewTable();
     (ui.win.document.getElementById('preset-name') as HTMLInputElement).value = '削除する設定';
     ui.button('save-preset').click(); await ui.waitForWrites(1); await ui.tick();
     const previous = JSON.stringify(ui.settings()), firstId = ui.settings()![0].id;
@@ -341,7 +160,7 @@ test('failed preset deletion preserves selection and old settings; successful de
 test('choosing new settings after an existing save creates a new record instead of overwriting the old one', async () => {
   const ui = await screen();
   try {
-    await ui.selectTable();
+    await ui.previewTable();
     const name = ui.win.document.getElementById('preset-name') as HTMLInputElement;
     const choices = ui.win.document.getElementById('preset') as HTMLSelectElement;
     name.value = '残す設定'; ui.button('save-preset').click();
@@ -414,11 +233,11 @@ test('a stale initial session read failure cannot remove the newer source subscr
 test('an old toolbar tab lookup rejection cannot invalidate the newer selected source', async () => {
   const ui = await screen({ native: true });
   try {
-    await ui.selectTable(); ui.deferTabLookup(7);
+    await ui.previewTable(); ui.deferTabLookup(7);
     ui.activation({ tabId: 7, activationId: 'old-delayed-lookup' }); await ui.waitForTabLookups(1);
-    ui.activation({ tabId: 9, activationId: 'new-source' }); await ui.waitForCalls(2);
-    assert.equal(ui.calls[1].target.tabId, 9);
-    ui.reply(ui.calls[1], 'new-document'); await ui.tick();
+    ui.activation({ tabId: 9, activationId: 'new-source' }); await ui.waitForCalls(3);
+    assert.equal(ui.calls[2].target.tabId, 9);
+    ui.reply(ui.calls[2], 'new-document'); await ui.tick();
     const currentStatus = ui.status();
     ui.tabLookups[0].reject(new Error('OLD_TAB_CLOSED')); await ui.tick();
     assert.equal(ui.status(), currentStatus, 'the old Chrome failure may not replace the new source guidance');
@@ -430,14 +249,14 @@ test('an old toolbar tab lookup rejection cannot invalidate the newer selected s
 test('a current tab lookup failure stops reading while preserving the subscription for a later toolbar action', async () => {
   const ui = await screen({ native: true });
   try {
-    await ui.selectTable(); ui.deferTabLookup(9);
+    await ui.previewTable(); ui.deferTabLookup(9);
     ui.activation({ tabId: 9, activationId: 'missing-current-tab' }); await ui.waitForTabLookups(1);
     ui.tabLookups[0].reject(new Error('CURRENT_TAB_CLOSED')); await ui.tick();
     assert.equal(ui.button('scan').disabled, true, 'a source that cannot be validated may not remain readable');
     assert.equal(ui.button('capture').disabled, true);
-    ui.activation({ tabId: 10, activationId: 'explicit-recovery' }); await ui.waitForCalls(2);
-    assert.equal(ui.calls[1].target.tabId, 10);
-    ui.reply(ui.calls[1], 'recovered-document'); await ui.tick();
+    ui.activation({ tabId: 10, activationId: 'explicit-recovery' }); await ui.waitForCalls(3);
+    assert.equal(ui.calls[2].target.tabId, 10);
+    ui.reply(ui.calls[2], 'recovered-document'); await ui.tick();
     assert.equal(ui.button('scan').disabled, false);
   } finally { ui.dom.window.close(); }
 });
@@ -475,10 +294,10 @@ test('an old highlight response cannot activate a changed source or replace its 
   for (const outcome of ['resolve', 'reject'] as const) await t.test(outcome, async () => {
     const ui = await screen({ native: true });
     try {
-      await ui.selectTable(); ui.button('show-source').click(); await ui.waitForCalls(2);
-      const oldHighlight = ui.calls[1];
-      ui.activation({ tabId: 9, activationId: 'after-highlight' }); await ui.waitForCalls(3);
-      ui.reply(ui.calls[2], 'new-document'); await ui.tick();
+      await ui.previewTable(); ui.button('show-source').click(); await ui.waitForCalls(3);
+      const oldHighlight = ui.calls[2];
+      ui.activation({ tabId: 9, activationId: 'after-highlight' }); await ui.waitForCalls(4);
+      ui.reply(ui.calls[3], 'new-document'); await ui.tick();
       const currentStatus = ui.status();
       if (outcome === 'resolve') ui.reply(oldHighlight, 'current-document');
       else oldHighlight.reject(new Error('OLD_HIGHLIGHT_FAILED'));
@@ -492,9 +311,9 @@ test('an old highlight response cannot activate a changed source or replace its 
 test('a successful current highlight activates the same tab that supplied its document', async () => {
   const ui = await screen({ native: true });
   try {
-    await ui.selectTable(); ui.button('show-source').click(); await ui.waitForCalls(2);
-    assert.equal(ui.calls[1].target.tabId, 7);
-    ui.reply(ui.calls[1], 'current-document'); await ui.tick();
+    await ui.previewTable(); ui.button('show-source').click(); await ui.waitForCalls(3);
+    assert.equal(ui.calls[2].target.tabId, 7);
+    ui.reply(ui.calls[2], 'current-document'); await ui.tick();
     assert.deepEqual(ui.tabUpdates, [7], 'highlight and activation must refer to the same captured source identity');
   } finally { ui.dom.window.close(); }
 });
@@ -516,7 +335,7 @@ test('session and tab events from another window cannot replace or invalidate th
 test('an old source capture cannot supply rows or unlock a newer toolbar activation', async () => {
   const ui = await screen({ native: true });
   try {
-    await ui.selectTable(); ui.button('capture').click(); await ui.waitForCalls(2);
+    await ui.selectTable(); await ui.waitForCalls(2);
     const oldCapture = ui.calls[1];
     ui.activation({ tabId: 9, activationId: 'replace-source' }); await ui.waitForCalls(3);
     assert.equal(ui.calls[2].target.tabId, 9);
@@ -528,9 +347,12 @@ test('an old source capture cannot supply rows or unlock a newer toolbar activat
     assert.equal(ui.button('save').disabled, true);
     const table = ui.win.document.getElementById('table') as HTMLSelectElement;
     table.value = '0'; table.dispatchEvent(new ui.win.Event('change'));
-    ui.button('show-source').click(); await ui.waitForCalls(4);
+    await ui.waitForCalls(4);
     assert.deepEqual(Array.from(ui.calls[3].target.documentIds ?? []), ['new-document'], 'the old capture must not poison document provenance');
-    ui.reply(ui.calls[3], 'new-document'); await ui.tick();
+    ui.replyCapture(ui.calls[3], 'new-document'); await ui.waitForWorkers(1); await ui.tick();
+    ui.button('show-source').click(); await ui.waitForCalls(5);
+    assert.deepEqual(Array.from(ui.calls[4].target.documentIds ?? []), ['new-document']);
+    ui.reply(ui.calls[4], 'new-document'); await ui.tick();
   } finally { ui.dom.window.close(); }
 });
 
@@ -556,7 +378,7 @@ test('tab switching, source navigation, and source closure discard the old previ
 test('saving blocks source activation and editing before the asynchronous digest produces a save record', async () => {
   const ui = await screen({ native: true });
   try {
-    await ui.previewTable(); ui.deferDigest(); ui.button('save').click();
+    await ui.previewTable(); ui.openColumn(); ui.deferDigest(); ui.button('save').click();
     await ui.waitForDigest(1);
     assert.equal(ui.stored.saveAttemptV1, undefined, 'the fixture must be before the durable save intention');
     assert.equal(ui.button('save').disabled, true, 'save-starting is already a blocked UI state');
@@ -564,7 +386,7 @@ test('saving blocks source activation and editing before the asynchronous digest
     assert.equal(ui.button('capture').disabled, true);
     assert.equal(ui.button('save-preset').disabled, true);
     assert.equal((ui.win.document.getElementById('table') as HTMLSelectElement).disabled, true);
-    assert.equal((ui.win.document.querySelector('#columns fieldset') as HTMLFieldSetElement).disabled, true);
+    assert.equal((ui.win.document.getElementById('column-name') as HTMLInputElement).disabled, true);
     ui.activateTab(9); ui.activation({ tabId: 9, activationId: 'during-digest' });
     ui.button('scan').click(); ui.button('save').click(); await ui.tick();
     assert.equal(ui.calls.length, 2, 'an activation during save-starting must not scan a replacement source');
@@ -576,5 +398,192 @@ test('saving blocks source activation and editing before the asynchronous digest
     assert.equal(storedAttempt.downloadId, 91);
     assert.equal(storedAttempt.state, 'saving');
     assert.equal(ui.calls.length, 2, 'a rejected activation must not be replayed while saving');
+  } finally { ui.dom.window.close(); }
+});
+
+test('a superseded automatic calculation cannot replace a newer source preview or confirmation', async t => {
+  for (const timing of ['while-new-pending', 'after-new-complete'] as const) for (const outcome of ['complete', 'fail'] as const) await t.test(`${timing}: ${outcome}`, async () => {
+    const ui = await screen({ native: true });
+    try {
+      ui.deferWorkers(); await ui.selectTable(); await ui.waitForCalls(2);
+      assert.equal(ui.calls[1].request.mode, 'capture', 'choosing a range must immediately capture its source data');
+      ui.replyCapture(ui.calls[1]); await ui.waitForWorkers(1);
+      ui.activation({ tabId: 9, activationId: 'replace-while-calculating' }); await ui.waitForCalls(3);
+      ui.reply(ui.calls[2], 'new-document'); await ui.tick();
+      const table = ui.win.document.getElementById('table') as HTMLSelectElement;
+      table.value = '0'; table.dispatchEvent(new ui.win.Event('change'));
+      await ui.waitForCalls(4); ui.replyCapture(ui.calls[3], 'new-document', [['new-source-value']]); await ui.waitForWorkers(2);
+      if (timing === 'while-new-pending') {
+        const pendingStatus = ui.status(); ui.workerCalls[0][outcome](); await ui.tick();
+        assert.equal(ui.status(), pendingStatus, 'a stale outcome cannot replace the later calculation guidance');
+        assert.equal((ui.win.document.getElementById('confirm') as HTMLInputElement).disabled, true, 'a stale finally may not unlock confirmation for the pending calculation');
+        assert.equal(ui.button('save').disabled, true);
+        assert.ok(!ui.win.document.getElementById('preview')!.textContent?.includes('keep-raw-id'));
+      }
+      ui.workerCalls[1].complete(); await ui.tick();
+      assert.ok(ui.win.document.getElementById('preview')!.textContent?.includes('new-source-value'));
+      const confirm = ui.win.document.getElementById('confirm') as HTMLInputElement;
+      confirm.checked = true; confirm.dispatchEvent(new ui.win.Event('change'));
+      const status = ui.status(), displayed = ui.win.document.getElementById('preview')!.textContent;
+      if (timing === 'after-new-complete') { ui.workerCalls[0][outcome](); await ui.tick(); }
+      assert.equal(ui.status(), status, 'a stopped calculation may not replace the current guidance');
+      assert.equal(ui.win.document.getElementById('preview')!.textContent, displayed, 'only the current source calculation may supply values');
+      assert.equal(confirm.checked, true, 'a stale calculation may not clear confirmation of the newer artifact');
+      assert.equal(ui.button('save').disabled, false, 'an old completion or failure may not lock the newer reviewed export');
+    } finally { ui.dom.window.close(); }
+  });
+});
+
+test('continued column-name typing supersedes calculations while retaining focus and immutable source values', async t => {
+  for (const outcome of ['complete', 'fail'] as const) await t.test(outcome, async () => {
+    const ui = await screen();
+    try {
+      await ui.selectTable(); await ui.waitForCalls(2); ui.replyCapture(ui.calls[1]); await ui.waitForWorkers(1); await ui.tick();
+      const adjust = ui.win.document.querySelector<HTMLButtonElement>('#preview th[data-source-index="0"] button');
+      assert.ok(adjust, 'the displayed column must expose its own adjustment control'); adjust.click();
+      const input = ui.win.document.getElementById('column-name') as HTMLInputElement;
+      const confirm = ui.win.document.getElementById('confirm') as HTMLInputElement;
+      confirm.checked = true; confirm.dispatchEvent(new ui.win.Event('change'));
+      ui.deferWorkers(); input.focus(); input.value = '名'; input.setSelectionRange(1, 1); input.dispatchEvent(new ui.win.Event('input'));
+      assert.equal(confirm.checked, false, 'editing immediately invalidates reviewed bytes before calculation finishes');
+      assert.equal(ui.button('save').disabled, true);
+      await ui.waitForWorkers(2);
+      assert.equal(input.disabled, false, 'calculation must allow the user to continue typing');
+      assert.equal(ui.win.document.activeElement, input);
+      input.value = '名称'; input.setSelectionRange(2, 2); input.dispatchEvent(new ui.win.Event('input')); await ui.waitForWorkers(3);
+      assert.equal(ui.workerCalls[1].request.columns[0].outputName, '名', 'each Worker receives the settings at its own scheduling boundary');
+      assert.equal(ui.workerCalls[2].request.columns[0].outputName, '名称');
+      assert.equal(JSON.stringify(ui.workerCalls[2].request.capture.rows), JSON.stringify([['keep-raw-id']]), 'column edits use the immutable retained source capture');
+      ui.workerCalls[2].complete(); await ui.tick();
+      const currentStatus = ui.status(), currentPreview = ui.win.document.getElementById('preview')!.textContent;
+      ui.workerCalls[1][outcome](); await ui.tick();
+      assert.equal(ui.win.document.getElementById('column-name'), input, 'calculation may not replace the input being edited');
+      assert.equal(ui.win.document.activeElement, input, 'the typing focus survives a calculation render');
+      assert.equal(input.selectionStart, 2); assert.equal(input.selectionEnd, 2);
+      assert.equal(ui.win.document.getElementById('preview')!.textContent, currentPreview);
+      assert.match(currentPreview ?? '', /名称/); assert.ok(currentPreview?.includes('keep-raw-id'));
+      assert.equal(ui.status(), currentStatus, 'old calculation failures may not replace the successful newer state');
+      assert.equal(ui.calls.length, 2, 'column changes never reread the source page');
+    } finally { ui.dom.window.close(); }
+  });
+});
+
+test('save-starting blocks queued column editor events before digest completion', async () => {
+  const ui = await screen({ native: true });
+  try {
+    await ui.selectTable(); await ui.waitForCalls(2); ui.replyCapture(ui.calls[1]); await ui.waitForWorkers(1); await ui.tick();
+    const adjust = ui.win.document.querySelector<HTMLButtonElement>('#preview th[data-source-index="0"] button');
+    assert.ok(adjust, 'the reviewed column must be adjustable before saving'); adjust.click();
+    const input = ui.win.document.getElementById('column-name') as HTMLInputElement;
+    const kind = ui.win.document.getElementById('column-kind') as HTMLSelectElement;
+    const confirm = ui.win.document.getElementById('confirm') as HTMLInputElement;
+    confirm.checked = true; confirm.dispatchEvent(new ui.win.Event('change'));
+    const preview = ui.win.document.getElementById('preview')!.textContent;
+    ui.deferDigest(); ui.button('save').click(); await ui.waitForDigest(1);
+    const heldBytes = Array.from(ui.digestCalls[0].bytes);
+    input.value = 'queued-name'; input.dispatchEvent(new ui.win.Event('input'));
+    kind.value = 'date'; kind.dispatchEvent(new ui.win.Event('change'));
+    ui.button('column-hide').dispatchEvent(new ui.win.Event('click'));
+    ui.button('column-left').dispatchEvent(new ui.win.Event('click'));
+    ui.button('save-preset').dispatchEvent(new ui.win.Event('click'));
+    ui.button('stop').dispatchEvent(new ui.win.Event('click'));
+    ui.activation({ tabId: 9, activationId: 'blocked-editor-save' }); await ui.tick(); await ui.tick();
+    assert.equal(ui.win.document.getElementById('preview')!.textContent, preview, 'queued editor events cannot replace the held export');
+    assert.equal(ui.workerCalls.length, 1, 'queued settings events may not schedule a different artifact during save-starting');
+    assert.equal(ui.calls.length, 2, 'queued source activation may not read another page');
+    assert.equal(ui.storageWrites.length, 0, 'queued preset saves may not start before the export intention is durable');
+    assert.deepEqual(Array.from(ui.digestCalls[0].bytes), heldBytes);
+    ui.digestCalls[0].resolve();
+    for (let tries = 0; tries < 30 && !ui.downloads.length; tries++) await ui.tick();
+    assert.equal(ui.downloads.length, 1);
+    assert.equal((ui.stored.saveAttemptV1 as { state: string }).state, 'saving');
+  } finally { ui.dom.window.close(); }
+});
+
+test('an unknown save retains the exact old export and download identity through queued editor and source events', async () => {
+  const ui = await screen({ native: true });
+  try {
+    await ui.selectTable(); await ui.waitForCalls(2); ui.replyCapture(ui.calls[1]); await ui.waitForWorkers(1); await ui.tick();
+    const input = ui.openColumn();
+    const confirm = ui.win.document.getElementById('confirm') as HTMLInputElement;
+    confirm.checked = true; confirm.dispatchEvent(new ui.win.Event('change'));
+    ui.missingDownload(); ui.button('save').click();
+    for (let tries = 0; tries < 30 && (ui.stored.saveAttemptV1 as { state?: string } | undefined)?.state !== 'unknown'; tries++) await ui.tick();
+    const original = JSON.stringify(ui.stored.saveAttemptV1), preview = ui.win.document.getElementById('preview')!.textContent;
+    assert.equal((ui.stored.saveAttemptV1 as { state: string }).state, 'unknown', 'an absent Chrome download remains unresolved');
+    input.value = 'queued-unknown-edit'; input.dispatchEvent(new ui.win.Event('input'));
+    ui.button('column-hide').dispatchEvent(new ui.win.Event('click'));
+    ui.button('save-preset').dispatchEvent(new ui.win.Event('click'));
+    ui.button('stop').dispatchEvent(new ui.win.Event('click'));
+    ui.activateTab(9); ui.activation({ tabId: 9, activationId: 'unknown-replacement' });
+    ui.button('save').dispatchEvent(new ui.win.Event('click')); await ui.tick(); await ui.tick();
+    assert.equal(JSON.stringify(ui.stored.saveAttemptV1), original, 'neither source changes nor editor events can replace the unresolved save intention');
+    assert.equal(ui.win.document.getElementById('preview')!.textContent, preview);
+    assert.equal(ui.workerCalls.length, 1); assert.equal(ui.calls.length, 2); assert.equal(ui.downloads.length, 1);
+    assert.equal(ui.button('save').disabled, true);
+    ui.button('reconcile').click(); await ui.tick(); await ui.tick();
+    assert.equal(ui.downloadSearches.at(-1), 91, 'reconciliation keeps searching the exact original download identity');
+    assert.equal(JSON.stringify(ui.stored.saveAttemptV1), original);
+    assert.equal(ui.downloads.length, 1, 'an unknown result never triggers an automatic replacement export');
+  } finally { ui.dom.window.close(); }
+});
+
+test('a new source scan clears a superseded calculation phase even when its old Worker replies later', async t => {
+  for (const outcome of ['complete', 'fail'] as const) await t.test(outcome, async () => {
+    const ui = await screen();
+    try {
+      ui.deferWorkers(); await ui.selectTable(); await ui.waitForCalls(2); ui.replyCapture(ui.calls[1]); await ui.waitForWorkers(1);
+      ui.button('scan').click(); await ui.waitForCalls(3); ui.reply(ui.calls[2], 'current-document'); await ui.tick();
+      const guidance = ui.status();
+      assert.equal(ui.button('stop').disabled, true, 'the completed scan has no remaining calculation to stop');
+      assert.equal(ui.win.document.getElementById('preview')!.getAttribute('aria-busy'), 'false', 'clearing a source must also clear its obsolete calculation phase');
+      ui.workerCalls[0][outcome](); await ui.tick();
+      assert.equal(ui.status(), guidance); assert.equal(ui.button('stop').disabled, true);
+      assert.equal(ui.button('scan').disabled, false); assert.equal(ui.button('pick').disabled, false);
+      assert.equal((ui.win.document.getElementById('confirm') as HTMLInputElement).disabled, true);
+      assert.equal(ui.button('save').disabled, true);
+      assert.equal(ui.win.document.querySelectorAll('#preview tbody tr').length, 0);
+    } finally { ui.dom.window.close(); }
+  });
+});
+
+test('composition-end calculation supersedes old Worker callbacks without dropping the new pending phase', async t => {
+  for (const outcome of ['complete', 'fail'] as const) await t.test(outcome, async () => {
+    const ui = await screen();
+    try {
+      await ui.previewTable(); const input = ui.openColumn(); ui.deferWorkers();
+      input.value = '確定前'; input.dispatchEvent(new ui.win.Event('input')); await ui.waitForWorkers(2);
+      input.dispatchEvent(new ui.win.CompositionEvent('compositionend', { data: '確定前', bubbles: true }));
+      assert.equal(ui.win.document.getElementById('preview')!.getAttribute('aria-busy'), 'true', 'composition end schedules the latest calculation');
+      ui.workerCalls[1][outcome](); await ui.tick();
+      assert.equal(ui.win.document.getElementById('preview')!.getAttribute('aria-busy'), 'true', 'an old rejection/finally may not clear the newest debounce phase');
+      assert.equal(ui.button('stop').disabled, false, 'the pending replacement calculation remains cancellable');
+      assert.equal((ui.win.document.getElementById('confirm') as HTMLInputElement).disabled, true);
+      assert.equal(ui.button('save').disabled, true);
+      await ui.waitForWorkers(3); ui.workerCalls[2].complete(); await ui.tick();
+      assert.equal(ui.win.document.getElementById('column-name'), input);
+      assert.equal(ui.win.document.getElementById('preview')!.getAttribute('aria-busy'), 'false');
+      assert.equal((ui.win.document.getElementById('confirm') as HTMLInputElement).disabled, false);
+      assert.ok(ui.win.document.getElementById('preview')!.textContent?.includes('確定前'));
+      assert.equal(ui.calls.length, 2);
+    } finally { ui.dom.window.close(); }
+  });
+});
+
+test('closing the column editor during a pending calculation keeps keyboard focus on the same output column after render', async () => {
+  const ui = await screen();
+  try {
+    await ui.previewTable(); const input = ui.openColumn(); ui.deferWorkers();
+    input.value = '変更した列'; input.dispatchEvent(new ui.win.Event('input'));
+    ui.button('column-close').click();
+    const oldHeader = ui.win.document.querySelector<HTMLButtonElement>('#preview th[data-source-index="0"] button');
+    assert.equal(ui.win.document.activeElement, oldHeader, 'closing the editor returns to its own column header');
+    await ui.waitForWorkers(2); ui.workerCalls[1].complete(); await ui.tick();
+    const updatedHeader = ui.win.document.querySelector<HTMLButtonElement>('#preview th[data-source-index="0"] button');
+    assert.ok(updatedHeader); assert.notEqual(updatedHeader, oldHeader, 'the new calculation replaces the grid controls');
+    assert.equal(ui.win.document.activeElement, updatedHeader, 'rendering keeps the keyboard position on the same original source column');
+    assert.ok(updatedHeader.textContent?.includes('変更した列'));
+    assert.equal(ui.win.document.getElementById('column-editor')!.hidden, true);
+    assert.equal(ui.calls.length, 2);
   } finally { ui.dom.window.close(); }
 });

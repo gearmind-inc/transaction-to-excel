@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="ja">
+<head><meta charset="utf-8"><title>構造を保つ表の合成ページ</title>
+<style>body{font:16px sans-serif;margin:24px}section{padding:20px;border:1px solid #999;margin-bottom:20px}table{border-collapse:collapse}th,td{padding:10px;border:1px solid #888}.cards{display:flex;gap:16px}.card{padding:12px;border:1px solid #aaa}#aria-grid [role="row"]{display:grid;grid-template-columns:160px 120px 80px;gap:8px;padding:8px;border-bottom:1px solid #ddd}#aria-grid [role="columnheader"]{font-weight:bold}</style></head>
+<body>
+<section id="power-section"><h1>パワーの比較</h1>
+<table id="power-grid"><thead>
+<tr><th rowspan="2">時間</th><th colspan="2">回数</th><th colspan="2">パワー</th><th colspan="2">W/kg</th></tr>
+<tr><th>自分</th><th>比較</th><th>自分</th><th>比較</th><th>自分</th><th>比較</th></tr>
+</thead><tbody>
+<tr><th rowspan="2">5 秒</th><td>2</td><td>3</td><td>400 W</td><td>420 W</td><td>6.0</td><td>6.3</td></tr>
+<tr><td>1</td><td>2</td><td>390 W</td><td>410 W</td><td>5.9</td><td>6.2</td></tr>
+</tbody></table></section>
+<section id="mixed"><h2>説明と一覧</h2><p>各一覧の項目を保ちます。</p>
+<table id="first-grid"><thead><tr><th>品名</th><th>個数</th></tr></thead><tbody><tr><td>りんご</td><td>2</td></tr><tr><td>みかん</td><td>3</td></tr></tbody></table>
+<p>次の一覧は価格を含みます。</p>
+<table id="second-grid"><thead><tr><th>商品</th><th>価格</th><th>在庫</th></tr></thead><tbody><tr><td>パン</td><td>120</td><td>5</td></tr></tbody></table>
+<p hidden>do-not-capture-hidden</p></section>
+<section id="cards"><h2>繰り返しカード</h2><div class="cards">
+<div class="card"><dl><dt>商品</dt><dd>ノート</dd><dt>価格</dt><dd>100</dd></dl></div>
+<div class="card"><dl><dt>商品</dt><dd>ペン</dd><dt>価格</dt><dd>80</dd></dl></div>
+</div></section>
+<section><div id="aria-grid" role="grid" style="padding:20px">
+<div role="row"><span role="columnheader">項目</span><span role="columnheader">値</span><span role="columnheader">単位</span></div>
+<div role="row"><span role="rowheader">距離</span><span role="gridcell">42</span><span role="gridcell">km</span></div>
+<div role="row"><span role="rowheader">時間</span><span role="gridcell">90</span><span role="gridcell">分</span></div>
+</div></section>
+</body></html>

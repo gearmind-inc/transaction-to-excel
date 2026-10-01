@@ -51,10 +51,10 @@ async function launchHarness(testInfo: TestInfo, profile?: string): Promise<Harn
   await source.evaluate(() => history.replaceState(null, '', '?session=do-not-store#private'));
   const workspace = await context.newPage();
   await workspace.goto(`chrome-extension://${extensionId}/workspace.html?tab=${tab.id}`);
-  await expect(workspace.locator('#status')).toContainText('表を選び');
+  await expect(workspace.locator('#status')).toContainText(/(?:範囲|表).*選/);
   // Table-list selection is still available as a disclosed alternative to the
   // new page picker. Open that disclosure before the existing seven flows.
-  await workspace.getByText('表の一覧から選ぶ', { exact: true }).click();
+  await workspace.getByText('取り込み方法・表の一覧', { exact: true }).click();
   return { context, source, workspace, serviceWorker, extensionId, tabId: tab.id!, requests, downloadDirectory };
 }
 
@@ -71,28 +71,51 @@ const test = base.extend<{ harness: Harness }>({
   },
 });
 
-const field = (page: Page, sourceColumn: number) => page.locator('#columns fieldset').filter({ has: page.locator('legend', { hasText: new RegExp(`元列 ${sourceColumn}：`) }) });
+const previewColumn = (page: Page, sourceColumn: number) => page.locator(`#preview th[data-source-index="${sourceColumn - 1}"] button`);
+async function editColumn(page: Page, sourceColumn: number): Promise<void> {
+  await previewColumn(page, sourceColumn).click();
+  await expect(page.locator('#column-editor')).toBeVisible();
+}
+const visible = (value: string) => value === '' ? '［空欄］' : value.replace(/\t/g, '⟦TAB⟧').replace(/\r/g, '⟦CR⟧').replace(/\n/g, '⟦LF⟧\n').replace(/\0/g, '⟦NUL⟧');
+const displayedValue = (value: string) => value === '' ? '［空欄］' : value;
+const previewNames = (page: Page) => page.locator('#preview th[data-source-index] button').evaluateAll(buttons => buttons.map(button => button.getAttribute('aria-label')?.replace(/：この列を調整$/, '')));
+async function assertPanelVisibleWithoutAnotherAction(page: Page, id: string): Promise<void> {
+  const rectangle = await page.locator(`#${id}`).evaluate(element => {
+    const bounds = element.getBoundingClientRect();
+    return { x: bounds.x, y: bounds.y, right: bounds.right, bottom: bounds.bottom, width: bounds.width, height: bounds.height, viewportWidth: innerWidth, viewportHeight: innerHeight };
+  });
+  expect(rectangle.width).toBeGreaterThan(0); expect(rectangle.height).toBeGreaterThan(0);
+  expect(rectangle.x).toBeGreaterThanOrEqual(-1); expect(rectangle.y).toBeGreaterThanOrEqual(-1);
+  expect(rectangle.right).toBeLessThanOrEqual(rectangle.viewportWidth + 1);
+  expect(rectangle.bottom).toBeLessThanOrEqual(rectangle.viewportHeight + 1);
+}
 
 async function configureGolden(page: Page): Promise<void> {
   await page.locator('#table').selectOption('1');
   await expect(page.locator('#coverage')).toContainText('8件 / 6列');
-  await field(page, 6).getByLabel('取得・出力', { exact: true }).uncheck();
+  await expect(page.locator('#preview tbody tr')).toHaveCount(8);
+  await editColumn(page, 6);
+  await page.locator('#column-hide').click();
+  await editColumn(page, 2);
   await page.getByRole('combobox', { name: '元列2の型', exact: true }).selectOption('date');
   await page.getByRole('combobox', { name: '元列2の日付入力書式', exact: true }).selectOption('YYYY/MM/DD');
+  await editColumn(page, 4);
   await page.getByRole('combobox', { name: '元列4の型', exact: true }).selectOption('amount');
   await page.getByRole('combobox', { name: '元列4の通貨記号（指定時は必須）', exact: true }).selectOption('¥');
   await page.getByRole('combobox', { name: '元列4の桁区切り', exact: true }).selectOption(',');
   for (const [column, name] of [[1, '取引ID'], [2, '日付'], [3, '内容'], [4, '取引額'], [5, '任意メモ']] as const) {
+    await editColumn(page, column);
     await page.getByRole('textbox', { name: `元列${column}の出力列名`, exact: true }).fill(name);
   }
-  for (const column of [1, 2, 4]) await field(page, column).getByLabel('空欄はエラー', { exact: true }).check();
+  for (const column of [1, 2, 4]) { await editColumn(page, column); await page.locator('#column-required').check(); }
   // Initial ID/date/description/amount/memo => date/description/amount/ID/memo.
-  for (let index = 0; index < 3; index++) await field(page, 1).getByRole('button', { name: '下へ', exact: true }).click();
+  await editColumn(page, 1);
+  for (let index = 0; index < 3; index++) await page.locator('#column-right').click();
+  await page.locator('#column-close').click();
 }
 
 async function captureGolden(page: Page): Promise<void> {
   await configureGolden(page);
-  await page.locator('#capture').click();
   await expect(page.locator('#summary')).toContainText('取得 8件 / 出力 8件 / 選択 5列 / 空欄 6セル / エラー 0件 / CSV保護 5件');
 }
 
@@ -115,9 +138,17 @@ test('real unpacked MV3: chosen table, explicit conversion, preview and saved CS
   await otherTab.goto(fixtureUrl);
   await otherTab.locator('#transactions tbody tr').first().locator('td').first().evaluate(cell => { cell.textContent = 'do-not-capture-other-tab'; });
   await captureGolden(workspace);
-  const displayed = await workspace.locator('#preview tbody tr').evaluateAll(rows => rows.map(row => Array.from(row.querySelectorAll('td')).slice(1).map(cell => Array.from(cell.querySelectorAll('.cell-line')).map(line => line.textContent))));
-  const visible = (value: string) => value === '' ? '［空欄］' : value.replace(/\t/g, '⟦TAB⟧').replace(/\r/g, '⟦CR⟧').replace(/\n/g, '⟦LF⟧\n').replace(/\0/g, '⟦NUL⟧');
-  expect(displayed).toEqual(EXPECTED_PREVIEW.rows.map(row => row.map(cell => [`元値：${visible(cell.raw)}`, `変換後：${visible(cell.logical)}`, `CSV値：${visible(cell.output)}`])));
+  const displayed = await workspace.locator('#preview tbody tr').evaluateAll(rows => rows.map(row => Array.from(row.querySelectorAll('td')).slice(1).map(cell => cell.querySelector('.cell-value')?.textContent)));
+  expect(displayed).toEqual(EXPECTED_PREVIEW.rows.map(row => row.map(cell => displayedValue(cell.logical))));
+  // Raw/converted/protected bytes remain individually inspectable; the default
+  // grid now displays each value only once instead of repeating three lines.
+  for (let row = 0; row < EXPECTED_PREVIEW.rows.length; row++) {
+    for (let column = 0; column < EXPECTED_PREVIEW.rows[row].length; column++) {
+      await workspace.locator('#preview tbody tr').nth(row).locator('td').nth(column + 1).getByRole('button').click();
+      const cell = EXPECTED_PREVIEW.rows[row][column];
+      await expect(workspace.locator('#cell-detail .cell-line')).toHaveText([`元値：${visible(cell.raw)}`, `変換後：${visible(cell.logical)}`, `CSV値：${visible(cell.output)}`]);
+    }
+  }
   expect(await workspace.locator('#preview').innerText()).not.toMatch(/do-not-capture/);
   await expect(workspace.locator('#save')).toBeDisabled();
   await workspace.locator('#confirm').check();
@@ -149,17 +180,17 @@ test('configuration changes invalidate confirmation; malformed dates preserve ra
   const page = harness.workspace;
   await captureGolden(page);
   await page.locator('#confirm').check();
+  await editColumn(page, 3);
   await page.getByRole('textbox', { name: '元列3の出力列名', exact: true }).fill('変更した内容');
   await expect(page.locator('#confirm')).not.toBeChecked();
-  await expect(page.locator('#preview tbody tr')).toHaveCount(0);
   await expect(page.locator('#save')).toBeDisabled();
-  await page.locator('#refresh-preview').click();
   await expect(page.locator('#preview thead')).toContainText('変更した内容');
   await harness.source.locator('#transactions tbody tr').first().locator('td').nth(1).evaluate(cell => { cell.textContent = '01/02/2026'; });
   await page.locator('#capture').click();
   await expect(page.locator('#summary')).toContainText('エラー 1件');
-  await expect(page.locator('#preview tbody tr').first().locator('td').nth(1)).toContainText('元値：01/02/2026');
-  await expect(page.locator('#preview .error')).toContainText('指定した入力書式 YYYY/MM/DD と一致しません');
+  await expect(page.locator('#preview tbody tr').first().locator('td').nth(1)).toContainText('01/02/2026');
+  await page.locator('#preview tbody tr').first().locator('td').nth(1).getByRole('button').click();
+  await expect(page.locator('#cell-detail')).toContainText('指定した入力書式 YYYY/MM/DD と一致しません');
   await expect(page.locator('#confirm')).toBeDisabled();
   await expect(page.locator('#save')).toBeDisabled();
   expect(await storage(page)).toEqual({});
@@ -168,6 +199,7 @@ test('configuration changes invalidate confirmation; malformed dates preserve ra
 test('local preset survives a real isolated browser restart, updates version, refuses structure mismatch, and deletes', async ({ harness }, testInfo) => {
   const page = harness.workspace;
   await captureGolden(page);
+  await page.getByText('保存した設定', { exact: true }).click();
   await page.locator('#preset-name').fill('合成表の設定');
   await page.locator('#save-preset').click();
   await expect(page.locator('#preset-status')).toContainText('設定をローカルに保存しました');
@@ -183,12 +215,14 @@ test('local preset survives a real isolated browser restart, updates version, re
   try {
     const next = restarted.workspace;
     await next.locator('#table').selectOption('1');
+    await next.getByText('保存した設定', { exact: true }).click();
     await next.locator('#preset').selectOption(preset.id);
     await next.locator('#apply-preset').click();
     await expect(next.locator('#preset-status')).toContainText('選択した設定を反映しました');
+    await editColumn(next, 1);
     await expect(next.getByRole('textbox', { name: '元列1の出力列名', exact: true })).toHaveValue('取引ID');
-    await expect(field(next, 6).getByLabel('取得・出力', { exact: true })).not.toBeChecked();
-    await next.locator('#capture').click();
+    await expect(previewColumn(next, 6)).toHaveCount(0);
+    await expect(next.locator('#hidden-columns button[data-restore-index="5"]')).toBeVisible();
     await expect(next.locator('#summary')).toContainText('取得 8件 / 出力 8件 / 選択 5列');
     await next.locator('#preset-name').fill('修正した設定');
     await next.locator('#save-preset').click();
@@ -197,7 +231,7 @@ test('local preset survives a real isolated browser restart, updates version, re
     expect((updated.presetsV1 as { version: number }[])[0].version).toBe(preset.version + 1);
     await restarted.source.locator('#transactions th').first().evaluate(cell => { cell.textContent = '変更されたID'; });
     await next.locator('#scan').click();
-    await expect(next.locator('#status')).toContainText('表を選び');
+    await expect(next.locator('#status')).toContainText(/(?:範囲|表).*選/);
     await next.locator('#table').selectOption('1');
     await next.locator('#preset').selectOption(preset.id);
     await next.locator('#apply-preset').click();
@@ -206,7 +240,7 @@ test('local preset survives a real isolated browser restart, updates version, re
     await next.locator('#delete-preset').click();
     await expect(next.locator('#preset-status')).toContainText('選んだ設定を削除しました');
     expect(await storage(next)).toEqual({ presetsV1: [] });
-    await expect(next.locator('#preview tbody tr')).toHaveCount(0);
+    await expect(next.locator('#preview tbody tr')).toHaveCount(8);
   } finally { await restarted.context.close(); }
 });
 
@@ -220,10 +254,11 @@ test('service worker stop does not own transaction memory; reload loses transact
   await session.send('ServiceWorker.stopAllWorkers');
   await expect.poll(() => versions.some(version => version.scriptURL === harness.serviceWorker.url() && version.runningStatus === 'stopped')).toBeTruthy();
   await expect(page.locator('#preview tbody tr')).toHaveCount(8);
-  await page.locator('#refresh-preview').click();
+  await editColumn(page, 3);
+  await page.locator('#column-name').fill('Worker停止後の内容');
   await expect(page.locator('#summary')).toContainText('取得 8件 / 出力 8件');
   await page.reload();
-  await expect(page.locator('#status')).toContainText('表を選び');
+  await expect(page.locator('#status')).toContainText(/(?:範囲|表).*選/);
   await expect(page.locator('#preview tbody tr')).toHaveCount(0);
   await expect(page.locator('#save')).toBeDisabled();
   expect(await storage(page)).toEqual({});
@@ -286,12 +321,16 @@ test('fixed 1,000 by 30 browser workload is measured, paginated and bounded with
   });
   const page = harness.workspace;
   await page.locator('#scan').click();
-  await expect(page.locator('#status')).toContainText('表を選び');
+  await expect(page.locator('#status')).toContainText(/(?:範囲|表).*選/);
   await page.locator('#table').selectOption('1');
   const elapsed: number[] = [];
   for (let trial = 0; trial < 20; trial++) {
     const start = performance.now();
     await page.locator('#capture').click();
+    // Identical summary text can belong to the previous trial. Wait for the
+    // real acquisition/worker/render cycle to release its control first.
+    await expect(page.locator('#capture')).toBeEnabled();
+    await expect(page.locator('#preview')).toHaveAttribute('aria-busy', 'false');
     await expect(page.locator('#summary')).toContainText('取得 1000件 / 出力 1000件 / 選択 30列');
     elapsed.push(performance.now() - start);
   }
@@ -333,9 +372,12 @@ const cardRows = [['カード', 'カードの内容']];
 const bodyRows = [
   ['確認用ページ / 概要', '最初の説明。参照できます。'],
   ['確認用ページ / 手順', '一行目\n二行目'],
-  ['確認用ページ / カード', 'カードの内容\n入力ラベル\n結合見出し\nAA\tBB'],
+  ['確認用ページ / カード', 'カードの内容'],
+  ['確認用ページ / カード', '入力ラベル'],
+  ['結合見出し', '結合見出し'],
+  ['AA', 'BB'],
 ];
-const bodyCsv = '\uFEFF"タイトル","内容"\r\n"確認用ページ / 概要","最初の説明。参照できます。"\r\n"確認用ページ / 手順","一行目\n二行目"\r\n"確認用ページ / カード","カードの内容\n入力ラベル\n結合見出し\nAA\tBB"\r\n';
+const bodyCsv = '\uFEFF"列1","列2"\r\n"確認用ページ / 概要","最初の説明。参照できます。"\r\n"確認用ページ / 手順","一行目\n二行目"\r\n"確認用ページ / カード","カードの内容"\r\n"確認用ページ / カード","入力ラベル"\r\n"結合見出し","結合見出し"\r\n"AA","BB"\r\n';
 
 async function contentSource(harness: Harness): Promise<void> {
   await harness.source.setContent(browserContent);
@@ -352,7 +394,7 @@ async function pickSource(harness: Harness, selector: string, content = false): 
   await source.bringToFront();
   // Padding targets the actual article/card container rather than its child
   // heading. Other selectors exercise their exact visible HTML element.
-  const position = ['#article', '#card'].includes(selector) ? { x: 8, y: 8 } : undefined;
+  const position = ['#article', '#card', '#aria-grid'].includes(selector) ? { x: 8, y: 8 } : undefined;
   await source.locator(selector).hover({ ...(position ? { position } : {}) });
   await expect(source.locator('[data-transaction-to-excel-picker]')).toBeVisible();
   await source.locator(selector).click({ ...(position ? { position } : {}) });
@@ -360,15 +402,13 @@ async function pickSource(harness: Harness, selector: string, content = false): 
   await workspace.bringToFront();
 }
 
-async function contentPreview(page: Page, expected: string[][]): Promise<void> {
-  await expect(page.locator('#capture')).toBeEnabled();
-  await page.locator('#capture').click();
+async function contentPreview(page: Page, expected: string[][], headers = contentHeader): Promise<void> {
   await expect(page.locator('#preview tbody tr')).toHaveCount(expected.length);
-  const observed = await page.locator('#preview tbody tr').evaluateAll(rows => rows.map(row => Array.from(row.querySelectorAll('td')).slice(1).map(cell => cell.querySelector('.cell-line')?.textContent)));
-  const visible = (value: string) => value.replace(/\t/g, '⟦TAB⟧').replace(/\r/g, '⟦CR⟧').replace(/\n/g, '⟦LF⟧\n');
-  expect(observed).toEqual(expected.map(row => row.map(value => `元値：${visible(value)}`)));
-  await expect(page.locator('#preview thead th')).toContainText(['元の行', ...contentHeader]);
-  await expect(page.locator('#summary')).toContainText(`取得 ${expected.length}件 / 出力 ${expected.length}件 / 選択 2列`);
+  await expect(page.locator('#preview')).toHaveAttribute('aria-busy', 'false');
+  const observed = await page.locator('#preview tbody tr').evaluateAll(rows => rows.map(row => Array.from(row.querySelectorAll('td')).slice(1).map(cell => cell.querySelector('.cell-value')?.textContent)));
+  expect(observed).toEqual(expected.map(row => row.map(displayedValue)));
+  expect(await previewNames(page)).toEqual(headers);
+  await expect(page.locator('#summary')).toContainText(`取得 ${expected.length}件 / 出力 ${expected.length}件 / 選択 ${headers.length}列`);
   await expect(page.locator('#confirm')).toBeEnabled();
 }
 
@@ -376,8 +416,7 @@ test('page content: whole body preview and real saved CSV bytes preserve visible
   const { workspace, downloadDirectory } = harness;
   await contentSource(harness);
   await workspace.locator('#page-content').click();
-  await contentPreview(workspace, bodyRows);
-  await expect(workspace.locator('#range-notice')).toContainText('HTML表');
+  await contentPreview(workspace, bodyRows, ['列1', '列2']);
   expect(await workspace.locator('#preview').innerText()).not.toMatch(/do-not-capture/);
   await workspace.locator('#confirm').check();
   const session = await harness.context.newCDPSession(workspace);
@@ -390,7 +429,7 @@ test('page content: whole body preview and real saved CSV bytes preserve visible
   expect(files).toHaveLength(1); expect(files[0].state).toBe('complete');
   const actual = await readFile(files[0].filename);
   expect(actual).toEqual(Buffer.from(bodyCsv, 'utf8'));
-  expect(parseCsv(actual)).toEqual([contentHeader, ...bodyRows]);
+  expect(parseCsv(actual)).toEqual([['列1', '列2'], ...bodyRows]);
   expect(JSON.stringify(record)).not.toMatch(/最初の説明|カードの内容|do-not-capture|session/);
   await assertOtherStorageEmpty(workspace);
   await testInfo.attach('content-browser-evidence', { body: JSON.stringify({ browser: harness.context.browser()?.version(), source: 'synthetic displayed HTML', actualSavedBytes: actual.length, activationDifference: 'test-only loopback host grant and direct workspace URL; native toolbar/side-panel activation not covered', saveDialogDifference: 'CDP isolated directory; native Save As UI not covered' }, null, 2), contentType: 'application/json' });
@@ -425,14 +464,10 @@ test('content mode: a visible partial table region can be chosen without selecti
   expect(await harness.workspace.locator('#preview').innerText()).not.toMatch(/BB|結合見出し/);
 });
 
-test('unsupported table: user explicitly switches the same selected range to title-content mode', async ({ harness }) => {
+test('merged table: the selected range keeps two columns without flattening or a fallback action', async ({ harness }) => {
   await contentSource(harness);
   await pickSource(harness, '#partial');
-  await expect(harness.workspace.locator('#capture')).toBeDisabled();
-  await expect(harness.workspace.locator('#use-content')).toBeEnabled();
-  await harness.workspace.locator('#use-content').click();
-  await contentPreview(harness.workspace, [['選択範囲', '結合見出し\nAA\tBB']]);
-  await expect(harness.workspace.locator('#range-notice')).toContainText('結合セル');
+  await contentPreview(harness.workspace, [['AA', 'BB']], ['結合見出し', '結合見出し（2）']);
 });
 
 test('range picker: Escape cleans the page and a restarted selection captures only the new card', async ({ harness }) => {
@@ -454,7 +489,7 @@ test('narrow panel: 320px layout keeps page controls and confirmation within the
   const { workspace } = harness;
   await contentSource(harness);
   await workspace.setViewportSize({ width: 320, height: 900 });
-  await workspace.locator('#page-content').click(); await contentPreview(workspace, bodyRows);
+  await workspace.locator('#page-content').click(); await contentPreview(workspace, bodyRows, ['列1', '列2']);
   const width = await workspace.evaluate(() => ({ viewport: innerWidth, document: document.documentElement.scrollWidth, body: document.body.scrollWidth }));
   expect(width.document).toBeLessThanOrEqual(width.viewport + 1); expect(width.body).toBeLessThanOrEqual(width.viewport + 1);
   for (const id of ['pick', 'page-content', 'capture', 'confirm', 'save']) {
@@ -475,4 +510,119 @@ test('new document: capture after source navigation cannot apply the old selecte
   await expect(harness.workspace.locator('#save')).toBeDisabled();
   await expect(harness.workspace.locator('#status')).toContainText(/変わ|見つ|取得|文書/);
   expect(await storage(harness.workspace)).toEqual({});
+});
+
+const structuredHeaders = ['時間', '回数 / 自分', '回数 / 比較', 'パワー / 自分', 'パワー / 比較', 'W/kg / 自分', 'W/kg / 比較'];
+const structuredRows = [
+  ['5 秒', '2', '3', '400 W', '420 W', '6.0', '6.3'],
+  ['', '1', '2', '390 W', '410 W', '5.9', '6.2'],
+];
+
+test('structured initial preview: selecting a merged seven-column table immediately preserves its rows and columns', async ({ harness }, testInfo) => {
+  const html = await readFile(resolve('tests/fixtures/structured-browser.html'), 'utf8');
+  await harness.source.setContent(html);
+  await harness.workspace.locator('#scan').click();
+  await pickSource(harness, '#power-grid');
+  // This is deliberately asserted before any acquisition/configuration click:
+  // a user selecting the range must first receive a usable structured table.
+  await expect(harness.workspace.locator('#preview thead th')).toHaveCount(8);
+  await expect(harness.workspace.locator('#preview tbody tr')).toHaveCount(2);
+  const observedHeaders = await previewNames(harness.workspace);
+  expect(observedHeaders).toEqual(structuredHeaders);
+  const observed = await harness.workspace.locator('#preview tbody tr').evaluateAll(rows => rows.map(row => Array.from(row.querySelectorAll('td')).slice(1).map(cell => cell.querySelector('.cell-value')?.textContent)));
+  expect(observed).toEqual(structuredRows.map(row => row.map(displayedValue)));
+  const image = testInfo.outputPath('structured-initial-preview.png');
+  await harness.workspace.screenshot({ path: image, fullPage: true });
+  await testInfo.attach('structured-initial-preview', { path: image, contentType: 'image/png' });
+});
+
+const mixedHeaders = ['列1', '列2', '列3'];
+const mixedRows = [
+  ['説明と一覧', '各一覧の項目を保ちます。', ''],
+  ['品名', '個数', ''],
+  ['りんご', '2', ''],
+  ['みかん', '3', ''],
+  ['説明と一覧', '次の一覧は価格を含みます。', ''],
+  ['商品', '価格', '在庫'],
+  ['パン', '120', '5'],
+];
+
+test('structured mixed range: all paragraphs and differently shaped tables remain separate cells in DOM order', async ({ harness }) => {
+  await harness.source.setContent(await readFile(resolve('tests/fixtures/structured-browser.html'), 'utf8'));
+  await harness.workspace.locator('#scan').click();
+  await harness.workspace.locator('#pick-kind').selectOption('content');
+  await harness.workspace.locator('#pick').click();
+  await harness.source.bringToFront();
+  await harness.source.locator('#mixed').hover({ position: { x: 8, y: 8 } });
+  await expect(harness.source.locator('[data-transaction-to-excel-picker]')).toBeVisible();
+  await harness.source.locator('#mixed').click({ position: { x: 8, y: 8 } });
+  await harness.workspace.bringToFront();
+  await contentPreview(harness.workspace, mixedRows, mixedHeaders);
+  expect(await harness.workspace.locator('#preview').innerText()).not.toMatch(/do-not-capture|400 W|ノート/);
+  // Generic composite columns are text: one slot may contain a heading and
+  // later a numeric value, so converting that whole slot would be misleading.
+  await editColumn(harness.workspace, 2);
+  await expect(harness.workspace.locator('#column-kind')).toBeDisabled();
+  await expect(harness.workspace.locator('#column-kind')).toHaveValue('text');
+  expect(await storage(harness.workspace)).toEqual({});
+});
+
+test('structured card range: repeated definition lists automatically become two named columns', async ({ harness }) => {
+  await harness.source.setContent(await readFile(resolve('tests/fixtures/structured-browser.html'), 'utf8'));
+  await harness.workspace.locator('#scan').click();
+  await pickSource(harness, '.cards', true);
+  await contentPreview(harness.workspace, [['ノート', '100'], ['ペン', '80']], ['商品', '価格']);
+  expect(await harness.workspace.locator('#preview').innerText()).not.toMatch(/パン|りんご|400 W/);
+});
+
+test('structured ARIA range: a displayed grid has separate named cells without an HTML table', async ({ harness }) => {
+  await harness.source.setContent(await readFile(resolve('tests/fixtures/structured-browser.html'), 'utf8'));
+  await harness.workspace.locator('#scan').click();
+  await pickSource(harness, '#aria-grid', true);
+  await contentPreview(harness.workspace, [['距離', '42', 'km'], ['時間', '90', '分']], ['項目', '値', '単位']);
+  expect(await harness.workspace.locator('#preview').innerText()).not.toMatch(/りんご|ノート|400 W/);
+});
+
+test('initial table adjustments: headers rename, move, hide and restore while preserving the captured snapshot', async ({ harness }, testInfo) => {
+  const { source, workspace } = harness;
+  await workspace.setViewportSize({ width: 420, height: 900 });
+  await source.setContent(await readFile(resolve('tests/fixtures/structured-browser.html'), 'utf8'));
+  await workspace.locator('#scan').click();
+  await pickSource(harness, '#power-grid');
+  await contentPreview(workspace, structuredRows, structuredHeaders);
+  await workspace.locator('#confirm').check();
+  await source.locator('#power-grid tbody tr').first().locator('td').nth(2).evaluate(cell => { cell.textContent = 'do-not-refetch'; });
+  await editColumn(workspace, 4);
+  // Check immediately after the header click. Filling the editor's input would
+  // itself auto-scroll under Playwright and conceal an off-screen editor bug.
+  await assertPanelVisibleWithoutAnotherAction(workspace, 'column-editor');
+  const editorImage = testInfo.outputPath('structured-column-editor.png');
+  await workspace.screenshot({ path: editorImage, fullPage: true });
+  await testInfo.attach('visible-column-editor', { path: editorImage, contentType: 'image/png' });
+  await workspace.locator('#column-name').fill('自分 W');
+  await expect(workspace.locator('#confirm')).not.toBeChecked();
+  await expect(previewColumn(workspace, 4)).toHaveAccessibleName('自分 W：この列を調整');
+  await workspace.locator('#column-left').click();
+  const movedHeaders = ['時間', '回数 / 自分', '自分 W', '回数 / 比較', 'パワー / 比較', 'W/kg / 自分', 'W/kg / 比較'];
+  const movedRows = [
+    ['5 秒', '2', '400 W', '3', '420 W', '6.0', '6.3'],
+    ['', '1', '390 W', '2', '410 W', '5.9', '6.2'],
+  ];
+  await contentPreview(workspace, movedRows, movedHeaders);
+  await workspace.locator('#column-hide').click();
+  await expect(previewColumn(workspace, 4)).toHaveCount(0);
+  await expect(workspace.locator('#preview thead th')).toHaveCount(7);
+  await workspace.locator('#hidden-columns button[data-restore-index="3"]').click();
+  // Restore retains the chosen order, including the move before hiding. The
+  // captured rows remain unchanged even though the source page has changed.
+  await contentPreview(workspace, movedRows, movedHeaders);
+  expect(await workspace.locator('#preview').innerText()).not.toMatch(/do-not-refetch/);
+  const cellDetail = workspace.locator('#preview tbody tr').first().locator('td').nth(3).getByRole('button');
+  await cellDetail.click();
+  await assertPanelVisibleWithoutAnotherAction(workspace, 'cell-detail');
+  await expect(workspace.locator('#cell-detail .cell-line')).toHaveText(['元値：400 W', '変換後：400 W', 'CSV値：400 W']);
+  await workspace.locator('#cell-detail').getByRole('button', { name: '閉じる', exact: true }).click();
+  await expect(workspace.locator('#cell-detail')).toBeHidden();
+  await expect(cellDetail).toBeFocused();
+  expect(await storage(workspace)).toEqual({});
 });

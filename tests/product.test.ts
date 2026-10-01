@@ -77,15 +77,24 @@ test('capture stops on changed URL, changed header, wrong table identity/index, 
   rejectsCapture(html, { sourceIndexes: [2] });
   rejectsCapture(html, { sourceIndexes: [] });
 });
-test('capture refuses rowspan/colspan, nested tables, form controls, uneven cells and hidden tables', () => {
-  rejectsCapture(simplePage('<tr><td rowspan="2">x</td><td>y</td></tr><tr><td>z</td></tr>'));
-  rejectsCapture(simplePage('<tr><td colspan="2">x</td></tr>'));
+test('capture refuses nested tables, form controls, uneven cells and hidden tables', () => {
   rejectsCapture(simplePage('<tr><td><table><tr><td>nested</td></tr></table></td><td>y</td></tr>'));
   rejectsCapture(simplePage('<tr><td><input value="secret"></td><td>y</td></tr>'));
   rejectsCapture(simplePage('<tr><td>x</td></tr>'));
   rejectsCapture(simplePage('<tr><td>x</td><td>y</td></tr>', undefined, 'hidden'));
   rejectsCapture(simplePage('<tr><td>x</td><td>y</td></tr>', undefined, 'style="display:none"'));
   rejectsCapture('<div style="visibility:hidden">' + simplePage('<tr><td>x</td><td>y</td></tr>') + '</div>');
+});
+test('declared ordinary body spans retain their anchor values and leave covered slots empty', () => {
+  for (const [body, expected] of [
+    ['<tr><td rowspan="2">x</td><td>y</td></tr><tr><td>z</td></tr>', [['x', 'y'], ['', 'z']]],
+    ['<tr><td colspan="2">x</td></tr>', [['x', '']]],
+  ] as const) withPage(simplePage(body), () => {
+    const captured = inspectPage(simpleRequest());
+    assert.equal(captured.error, undefined);
+    assert.deepEqual(captured.capture?.rows, expected);
+    assert.ok(captured.capture?.warnings?.some(value => /結合|空欄/.test(value)));
+  });
 });
 test('span=1 cells remain selectable ordinary cells and preserve selected original values', () => withPage(simplePage(
   '<tr><td rowspan="1" colspan="1"> \t日本語"引用"<br>二行目</td><td rowspan="1" colspan="1">00001</td></tr>',
@@ -99,14 +108,14 @@ test('span=1 cells remain selectable ordinary cells and preserve selected origin
   assert.equal(captured.error, undefined);
   assert.deepEqual(captured.capture?.rows, [['00001', ' \t日本語"引用"\n二行目']]);
 }));
-test('rowspan=0 spans the remaining rows and is still rejected even when physical cell counts match', () => withPage(simplePage(
+test('rowspan=0 that creates a wider logical row is rejected despite equal physical cell counts', () => withPage(simplePage(
   '<tr><td rowspan="0">x</td><td>y</td></tr><tr><td>z</td><td>w</td></tr>',
 ), () => {
   const listed = inspectPage(simpleRequest({ mode: 'list' }));
-  assert.match(listed.tables?.[0].error ?? '', /結合セル/);
+  assert.match(listed.tables?.[0].error ?? '', /列数|結合セル/);
   const captured = inspectPage(simpleRequest());
-  assert.match(captured.error ?? '', /結合セル/);
-  assert.equal(captured.capture, undefined, 'a true merged cell must not expose partial capture');
+  assert.match(captured.error ?? '', /列数|結合セル/);
+  assert.equal(captured.capture, undefined, 'inconsistent logical width must not expose partial capture');
 }));
 test('empty table is a successful zero-row capture, not a read failure', () => withPage(simplePage(''), () => {
   const result = inspectPage(simpleRequest());

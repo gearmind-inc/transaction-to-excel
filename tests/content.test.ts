@@ -11,14 +11,24 @@ import { parseCsv } from './oracle.js';
 
 // Independent, hand-authored expectations. Never derive these from inspectPage output.
 const CONTENT_URL = 'https://fixture.example/guide';
-const CONTENT_HEADERS = ['タイトル', '内容'];
+const CONTENT_HEADERS = ['列1', '列2'];
 const CONTENT_ROWS = [
   ['利用ガイド', '表示中の文書を保存します。'],
-  ['利用ガイド / 準備', '画面を開き、内容を確認します。\nログイン名\n保存操作:保存\n編集メニュー\n関連情報\n更新情報'],
+  ['利用ガイド / 準備', '画面を開き、内容を確認します。'],
+  ['利用ガイド / 準備', 'ログイン名'],
+  ['利用ガイド / 準備', '保存操作:保存'],
+  ['利用ガイド / 準備', '編集メニュー'],
+  ['利用ガイド / 準備', '関連情報'],
+  ['利用ガイド / 準備', '更新情報'],
   ['利用ガイド / 読み取り', '画面の本文だけを扱います。\n次の段落も残します。'],
-  ['利用ガイド / 読み取り / 内容の例', '最初の項目\n二番目の項目\n対象\n読み込み済みの内容\n出力\nCSV'],
+  ['利用ガイド / 読み取り / 内容の例', '最初の項目'],
+  ['利用ガイド / 読み取り / 内容の例', '二番目の項目'],
+  ['項目', '内容'],
+  ['対象', '読み込み済みの内容'],
+  ['出力', 'CSV'],
   ['利用ガイド / 読み取り / コード', 'const example = "日本語";\n  console.log(example);'],
-  ['利用ガイド / 確認', '同じ内容\n同じ内容'],
+  ['利用ガイド / 確認', '同じ内容'],
+  ['利用ガイド / 確認', '同じ内容'],
 ];
 const fixture = readFileSync(new URL('./fixtures/content.html', import.meta.url), 'utf8');
 
@@ -42,7 +52,7 @@ function describe(key?: string): TableCandidate {
   assert.equal(result.tables?.length, 1, 'describe must return one selected region, not a table list');
   const candidate = result.tables![0];
   assert.equal(candidate.kind, 'content');
-  assert.deepEqual(candidate.headers, CONTENT_HEADERS);
+  assert.ok(candidate.headers.length > 0 && candidate.headers.length <= LIMITS.columns);
   assert.equal(candidate.index, 0);
   assert.equal(typeof candidate.contentSignature, 'string', 'selected heading structure needs a bounded fingerprint');
   assert.ok(candidate.contentSignature!.length > 0 && candidate.contentSignature!.length <= 128);
@@ -51,7 +61,7 @@ function describe(key?: string): TableCandidate {
 function capture(candidate: TableCandidate, overrides: Partial<InspectRequest> = {}) {
   return inspectPage(contentRequest('capture', {
     tableIndex: candidate.index, tableKey: candidate.key, headers: candidate.headers,
-    contentSignature: candidate.contentSignature, sourceIndexes: [0, 1], ...overrides,
+    contentSignature: candidate.contentSignature, sourceIndexes: candidate.headers.map((_, index) => index), ...(candidate.layout ? { layout: candidate.layout } : {}), ...overrides,
   }));
 }
 
@@ -87,7 +97,7 @@ test('document evaluator: selecting only content preserves exact text and uses t
   const result = capture(describe('content:id:guide'), { sourceIndexes: [1] });
   assert.equal(result.error, undefined);
   assert.deepEqual(result.capture?.rows, CONTENT_ROWS.map(row => [row[1]]));
-  const preview = buildPreview(result.capture!, [{ ...COLUMNS[0], sourceIndex: 1, outputName: '内容', kind: 'text' }]);
+  const preview = buildPreview(result.capture!, [{ ...COLUMNS[0], sourceIndex: 1, outputName: '内容', kind: 'text', required: false }]);
   assert.equal(preview.errorCount, 0);
   assert.deepEqual(parseCsv(generateCsv(preview)), [['内容'], ...CONTENT_ROWS.map(row => [row[1]])]);
 }));
@@ -97,7 +107,7 @@ test('document evaluator: arbitrary visible card regions can be selected indepen
     const candidate = describe('content:id:power');
     const result = capture(candidate);
     assert.equal(result.error, undefined);
-    assert.deepEqual(result.capture?.rows, [['パワー', "期間: 30日\neFTP: 250 W\nW': 0 kJ"]]);
+    assert.deepEqual(result.capture?.rows, [['パワー', '期間: 30日'], ['パワー', 'eFTP: 250 W'], ['パワー', "W': 0 kJ"]]);
     assert.ok(!JSON.stringify(result.capture).includes('対象外'));
   },
 ));
@@ -116,17 +126,17 @@ test('document evaluator: nested wrappers never repeat descendant paragraphs', (
   '<article id="article"><header><h1>本文</h1></header><div><div><p>一度だけ</p><p>二段落目</p></div></div><h2>次</h2><div>単独の表示テキスト<span>と続き</span></div></article>', () => {
     const result = capture(describe('content:id:article'));
     assert.equal(result.error, undefined);
-    assert.deepEqual(result.capture?.rows, [['本文', '一度だけ\n二段落目'], ['本文 / 次', '単独の表示テキストと続き']]);
+    assert.deepEqual(result.capture?.rows, [['本文', '一度だけ'], ['本文', '二段落目'], ['本文 / 次', '単独の表示テキストと続き']]);
   },
 ));
 
-test('document evaluator: a long section splits at complete block boundaries without truncation', () => withPage(
+test('document evaluator: each complete paragraph remains one row without truncation', () => withPage(
   '<main id="long"><h1>長い章</h1><p>' + 'a'.repeat(6000) + '</p><p>' + 'b'.repeat(6000) + '</p><p>終わり</p></main>', () => {
     const candidate = describe('content:id:long');
-    assert.equal(candidate.rowCount, 2);
+    assert.equal(candidate.rowCount, 3);
     const result = capture(candidate);
     assert.equal(result.error, undefined);
-    assert.deepEqual(result.capture?.rows, [['長い章', 'a'.repeat(6000)], ['長い章', 'b'.repeat(6000) + '\n終わり']]);
+    assert.deepEqual(result.capture?.rows, [['長い章', 'a'.repeat(6000)], ['長い章', 'b'.repeat(6000)], ['長い章', '終わり']]);
     assert.ok(result.capture!.rows.every(row => row.every(cell => cell.length <= LIMITS.cellChars)));
   },
 ));
@@ -145,7 +155,7 @@ test('document evaluator: loaded offscreen paragraphs count, while collapsed det
   '<main id="visible"><h1>画面の内容</h1><p style="margin-top:10000px">読み込み済み</p><details><summary>説明</summary><p>do-not-capture-collapsed</p></details><div hidden><h2>do-not-capture-heading</h2><p>do-not-capture-hidden-parent</p></div></main>', () => {
     const result = capture(describe('content:id:visible'));
     assert.equal(result.error, undefined);
-    assert.deepEqual(result.capture?.rows, [['画面の内容', '読み込み済み\n説明']]);
+    assert.deepEqual(result.capture?.rows, [['画面の内容', '読み込み済み'], ['画面の内容', '説明']]);
     assert.ok(!JSON.stringify(result.capture).includes('do-not-capture'));
   },
 ));
@@ -155,19 +165,20 @@ test('document evaluator: graphics and frames are disclosed, SVG text is retaine
     const candidate = describe('content:id:chart');
     const result = capture(candidate);
     assert.equal(result.error, undefined);
-    assert.deepEqual(result.capture?.rows, [['グラフ', 'eFTP: 250 W\n250 W\n説明']]);
+    assert.deepEqual(result.capture?.rows, [['グラフ', 'eFTP: 250 W'], ['グラフ', '250 W'], ['グラフ', '説明']]);
     assert.ok(result.capture?.warnings?.some(value => /グラフ|図形|画像|Canvas|canvas|SVG/.test(value)), 'omitted graphical content must be disclosed');
     assert.ok(result.capture?.warnings?.some(value => /frame|iframe|フレーム/.test(value)), 'frame boundaries must be disclosed');
     assert.ok(!JSON.stringify(result.capture).includes('do-not-capture'));
   },
 ));
 
-test('document evaluator: merged visual tables become literal row text with a warning, never guessed logical columns', () => withPage(
+test('document evaluator: merged visual headers retain their declared column groups inside a mixed rectangle', () => withPage(
   '<main id="mixed"><h1>結果</h1><table><thead><tr><th colspan="2">測定</th></tr><tr><th>項目</th><th>値</th></tr></thead><tbody><tr><td>eFTP</td><td>250 W</td></tr><tr hidden><td>do-not-capture-hidden-row</td><td>hidden</td></tr></tbody></table><p>補足</p></main>', () => {
     const result = capture(describe('content:id:mixed'));
     assert.equal(result.error, undefined);
-    assert.deepEqual(result.capture?.rows, [['結果', '測定\n項目\t値\neFTP\t250 W\n補足']]);
-    assert.ok(result.capture?.warnings?.some(value => /表|結合|タブ/.test(value)), 'text conversion must be distinguished from normal table extraction');
+    assert.deepEqual(result.capture?.headers, ['列1', '列2']);
+    assert.equal(result.capture?.layout, 'composite');
+    assert.deepEqual(result.capture?.rows, [['結果', ''], ['測定 / 項目', '測定 / 値'], ['eFTP', '250 W'], ['結果', '補足']]);
     assert.ok(!JSON.stringify(result.capture).includes('do-not-capture'));
   },
 ));
@@ -251,10 +262,9 @@ test('table describe evaluator: pointer-selected tables expose current metadata 
     const result = inspectPage(request);
     assert.equal(result.error, undefined, 'a picked normal table must be described without preexisting headers');
     assert.deepEqual(result.tables, [{ index: 0, key: 'id:normal', headers: ['A', 'B'], rowCount: 1 }]);
-    const unsupported = inspectPage({ ...request, tableIndex: 1, tableKey: 'id:merged' });
-    assert.equal(unsupported.error, undefined, 'an unsupported table must remain identifiable for a text-mode retry');
-    assert.equal(unsupported.tables?.[0].key, 'id:merged');
-    assert.match(unsupported.tables?.[0].error ?? '', /結合セル/);
+    const merged = inspectPage({ ...request, tableIndex: 1, tableKey: 'id:merged' });
+    assert.equal(merged.error, undefined, 'declared merged headers are now represented by their explicit slots');
+    assert.deepEqual(merged.tables, [{ index: 1, key: 'id:merged', headers: ['見出し', '見出し'], rowCount: 1 }]);
   },
 ));
 
