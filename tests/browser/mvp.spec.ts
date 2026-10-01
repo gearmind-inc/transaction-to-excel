@@ -2,7 +2,7 @@ import { test as base, expect, chromium, type BrowserContext, type Page, type Wo
 import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { resolve, sep } from 'node:path';
 import { arch, cpus, release, totalmem, loadavg } from 'node:os';
-import { EXPECTED_CSV, EXPECTED_PREVIEW } from '../fixtures/expected';
+
 import { parseCsv } from '../oracle';
 
 const fixtureUrl = 'http://127.0.0.1:4173/transactions';
@@ -53,8 +53,8 @@ async function launchHarness(testInfo: TestInfo, profile?: string): Promise<Harn
   await workspace.goto(`chrome-extension://${extensionId}/workspace.html?tab=${tab.id}`);
   await expect(workspace.locator('#status')).toContainText(/(?:範囲|表).*選/);
   // Table-list selection is still available as a disclosed alternative to the
-  // new page picker. Open that disclosure before the existing seven flows.
-  await workspace.getByText('取り込み方法・表の一覧', { exact: true }).click();
+  // page picker. Open that disclosure for the table-list regression flows.
+  await workspace.locator('details.source-options > summary').click();
   return { context, source, workspace, serviceWorker, extensionId, tabId: tab.id!, requests, downloadDirectory };
 }
 
@@ -90,33 +90,43 @@ async function assertPanelVisibleWithoutAnotherAction(page: Page, id: string): P
   expect(rectangle.bottom).toBeLessThanOrEqual(rectangle.viewportHeight + 1);
 }
 
+// Fixed text-only browser oracle: raw dates and amounts remain strings. The
+// protected CSV cells are specified here independently of product code.
+const t = (raw: string, output = raw) => ({ raw, logical: raw, output });
+const EXPECTED_PREVIEW = { rows: [
+  [t('2026/10/01'), t('日本語,"引用"\n二行目'), t('¥1,234.50'), t('00001'), t('')],
+  [t('2024/02/29'), t('=SUM(1,2)', '\t=SUM(1,2)'), t('-¥330', '\t-¥330'), t('12345678901234567890'), t('0')],
+  [t('2026/10/02'), t('+81-90-0000', '\t+81-90-0000'), t('¥0'), t('00003'), t('')],
+  [t('2026/10/02'), t('@name', '\t@name'), t('¥12.00'), t('00004'), t('')],
+  [t('2026/10/03'), t(' \t＝1+2', '\t \t＝1+2'), t('¥00001.2300'), t('00005'), t('')],
+  [t('2026/10/04'), t('同値の別取引'), t('¥20.00'), t('00777'), t('')],
+  [t('2026/10/04'), t('同値の別取引'), t('¥20.00'), t('00777'), t('')],
+  [t('2026/10/05'), t('-1+2', '\t-1+2'), t('-¥0.50', '\t-¥0.50'), t('00008'), t('備考')],
+] };
+const EXPECTED_CSV = '\uFEFF"日付","内容","取引額","取引ID","任意メモ"\r\n'
+  + '"2026/10/01","日本語,""引用""\n二行目","¥1,234.50","00001",""\r\n'
+  + '"2024/02/29","\t=SUM(1,2)","\t-¥330","12345678901234567890","0"\r\n'
+  + '"2026/10/02","\t+81-90-0000","¥0","00003",""\r\n'
+  + '"2026/10/02","\t@name","¥12.00","00004",""\r\n'
+  + '"2026/10/03","\t \t＝1+2","¥00001.2300","00005",""\r\n'
+  + '"2026/10/04","同値の別取引","¥20.00","00777",""\r\n'
+  + '"2026/10/04","同値の別取引","¥20.00","00777",""\r\n'
+  + '"2026/10/05","\t-1+2","\t-¥0.50","00008","備考"\r\n';
 async function configureGolden(page: Page): Promise<void> {
   await page.locator('#table').selectOption('1');
   await expect(page.locator('#coverage')).toContainText('8件 / 6列');
   await expect(page.locator('#preview tbody tr')).toHaveCount(8);
-  await editColumn(page, 6);
-  await page.locator('#column-hide').click();
-  await editColumn(page, 2);
-  await page.getByRole('combobox', { name: '元列2の型', exact: true }).selectOption('date');
-  await page.getByRole('combobox', { name: '元列2の日付入力書式', exact: true }).selectOption('YYYY/MM/DD');
-  await editColumn(page, 4);
-  await page.getByRole('combobox', { name: '元列4の型', exact: true }).selectOption('amount');
-  await page.getByRole('combobox', { name: '元列4の通貨記号（指定時は必須）', exact: true }).selectOption('¥');
-  await page.getByRole('combobox', { name: '元列4の桁区切り', exact: true }).selectOption(',');
+  await editColumn(page, 6); await page.locator('#column-hide').click();
   for (const [column, name] of [[1, '取引ID'], [2, '日付'], [3, '内容'], [4, '取引額'], [5, '任意メモ']] as const) {
-    await editColumn(page, column);
-    await page.getByRole('textbox', { name: `元列${column}の出力列名`, exact: true }).fill(name);
+    await editColumn(page, column); await page.locator('#column-name').fill(name);
   }
-  for (const column of [1, 2, 4]) { await editColumn(page, column); await page.locator('#column-required').check(); }
-  // Initial ID/date/description/amount/memo => date/description/amount/ID/memo.
   await editColumn(page, 1);
   for (let index = 0; index < 3; index++) await page.locator('#column-right').click();
   await page.locator('#column-close').click();
 }
-
 async function captureGolden(page: Page): Promise<void> {
   await configureGolden(page);
-  await expect(page.locator('#summary')).toContainText('取得 8件 / 出力 8件 / 選択 5列 / 空欄 6セル / エラー 0件 / CSV保護 5件');
+  await expect(page.locator('#summary')).toContainText('取得 8件 / 出力 8件・5列 / 空欄 6セル / CSV保護 7件');
 }
 
 async function storage(page: Page): Promise<Record<string, unknown>> {
@@ -132,7 +142,7 @@ async function assertOtherStorageEmpty(page: Page): Promise<void> {
   }))).toEqual({ localStorageEntries: 0, sessionStorageEntries: 0, indexedDBNames: [], sync: {} });
 }
 
-test('real unpacked MV3: chosen table, explicit conversion, preview and saved CSV bytes match independent oracle', async ({ harness }, testInfo) => {
+test('real unpacked MV3: chosen table, literal text, preview and saved CSV bytes match independent oracle', async ({ harness }, testInfo) => {
   const { workspace, requests, downloadDirectory } = harness;
   const otherTab = await harness.context.newPage();
   await otherTab.goto(fixtureUrl);
@@ -149,7 +159,7 @@ test('real unpacked MV3: chosen table, explicit conversion, preview and saved CS
     for (let column = 0; column < EXPECTED_PREVIEW.rows[row].length; column++) {
       await workspace.locator('#preview tbody tr').nth(row).locator('td').nth(column + 1).getByRole('button').click();
       const cell = EXPECTED_PREVIEW.rows[row][column];
-      await expect(workspace.locator('#cell-detail .cell-line')).toHaveText([`元値：${visible(cell.raw)}`, `変換後：${visible(cell.logical)}`, `CSV値：${visible(cell.output)}`]);
+      await expect(workspace.locator('#cell-detail .cell-line')).toHaveText([`元の文字列：${visible(cell.raw)}`, `表の値：${visible(cell.logical)}`, `CSV値：${visible(cell.output)}`]);
     }
   }
   expect(await workspace.locator('#preview').innerText()).not.toMatch(/do-not-capture/);
@@ -161,7 +171,7 @@ test('real unpacked MV3: chosen table, explicit conversion, preview and saved CS
   await session.send('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: downloadDirectory, eventsEnabled: true });
   // Exercise rapid repeated activation; the production state machine must save once.
   await workspace.locator('#save').evaluate(button => { (button as HTMLButtonElement).click(); (button as HTMLButtonElement).click(); });
-  await expect(workspace.locator('#save-status')).toContainText('保存完了を照合しました');
+  await expect(workspace.locator('#save-status')).toContainText('CSVを保存しました');
   await expect(workspace.locator('#save')).toBeDisabled();
   const record = await storage(workspace);
   expect(Object.keys(record)).toEqual(['saveAttemptV1']);
@@ -173,78 +183,27 @@ test('real unpacked MV3: chosen table, explicit conversion, preview and saved CS
   expect(downloads[0].filename.startsWith(downloadDirectory + sep)).toBeTruthy();
   const actual = await readFile(downloads[0].filename);
   expect(actual).toEqual(Buffer.from(EXPECTED_CSV, 'utf8'));
+  expect(parseCsv(actual)).toEqual([['日付', '内容', '取引額', '取引ID', '任意メモ'], ...EXPECTED_PREVIEW.rows.map(row => row.map(cell => cell.output))]);
   expect(JSON.stringify(record)).not.toMatch(/00001|12345678901234567890|日本語|SUM|session|do-not-/);
   await assertOtherStorageEmpty(workspace);
   expect(requests.every(url => new URL(url).origin === new URL(fixtureUrl).origin)).toBeTruthy();
   await testInfo.attach('test-environment', { body: JSON.stringify({ browser: harness.context.browser()?.version(), host: host(), permissionDifference: 'test-only loopback host grant; activeTab activation not covered', saveDialogDifference: 'CDP isolated download directory; native Save As UI not covered', actualSavedBytes: actual.length }, null, 2), contentType: 'application/json' });
 });
 
-test('configuration changes invalidate confirmation; malformed dates preserve raw value and prevent saving', async ({ harness }) => {
-  const page = harness.workspace;
-  await captureGolden(page);
-  await page.locator('#confirm').check();
-  await editColumn(page, 3);
-  await page.getByRole('textbox', { name: '元列3の出力列名', exact: true }).fill('変更した内容');
-  await expect(page.locator('#confirm')).not.toBeChecked();
-  await expect(page.locator('#save')).toBeDisabled();
+test('column edits invalidate confirmation; ambiguous date and currency strings remain literal without deferred conversion controls', async ({ harness }) => {
+  const page = harness.workspace; await captureGolden(page);
+  await page.locator('#confirm').check(); await editColumn(page, 3);
+  await page.locator('#column-name').fill('変更した内容');
+  await expect(page.locator('#confirm')).not.toBeChecked(); await expect(page.locator('#save')).toBeDisabled();
   await expect(page.locator('#preview thead')).toContainText('変更した内容');
+  await expect(page.locator('#column-kind, #column-required, #preset, #save-preset')).toHaveCount(0);
   await harness.source.locator('#transactions tbody tr').first().locator('td').nth(1).evaluate(cell => { cell.textContent = '01/02/2026'; });
   await page.locator('#capture').click();
-  await expect(page.locator('#summary')).toContainText('エラー 1件');
-  await expect(page.locator('#preview tbody tr').first().locator('td').nth(1)).toContainText('01/02/2026');
-  await page.locator('#preview tbody tr').first().locator('td').nth(1).getByRole('button').click();
-  await expect(page.locator('#cell-detail')).toContainText('指定した入力書式 YYYY/MM/DD と一致しません');
-  await expect(page.locator('#confirm')).toBeDisabled();
-  await expect(page.locator('#save')).toBeDisabled();
-  expect(await storage(page)).toEqual({});
-});
-
-test('local preset survives a real isolated browser restart, updates version, refuses structure mismatch, and deletes', async ({ harness }, testInfo) => {
-  const page = harness.workspace;
-  await captureGolden(page);
-  await page.getByText('保存した設定', { exact: true }).click();
-  await page.locator('#preset-name').fill('合成表の設定');
-  await page.locator('#save-preset').click();
-  await expect(page.locator('#preset-status')).toContainText('設定をローカルに保存しました');
-  const before = await storage(page);
-  expect(Object.keys(before)).toEqual(['presetsV1']);
-  expect(JSON.stringify(before)).not.toMatch(/00001|12345678901234567890|日本語|SUM|session|do-not-/);
-  await assertOtherStorageEmpty(page);
-  const preset = (before.presetsV1 as { id: string; version: number; path: string }[])[0];
-  expect(preset.path).toBe('/transactions');
-  await harness.context.close();
-  // Same disposable profile and same unpacked path: real persistence, not API mocks.
-  const restarted = await launchHarness(testInfo, testInfo.outputPath('temporary-profile'));
-  try {
-    const next = restarted.workspace;
-    await next.locator('#table').selectOption('1');
-    await next.getByText('保存した設定', { exact: true }).click();
-    await next.locator('#preset').selectOption(preset.id);
-    await next.locator('#apply-preset').click();
-    await expect(next.locator('#preset-status')).toContainText('選択した設定を反映しました');
-    await editColumn(next, 1);
-    await expect(next.getByRole('textbox', { name: '元列1の出力列名', exact: true })).toHaveValue('取引ID');
-    await expect(previewColumn(next, 6)).toHaveCount(0);
-    await expect(next.locator('#hidden-columns button[data-restore-index="5"]')).toBeVisible();
-    await expect(next.locator('#summary')).toContainText('取得 8件 / 出力 8件 / 選択 5列');
-    await next.locator('#preset-name').fill('修正した設定');
-    await next.locator('#save-preset').click();
-    await expect(next.locator('#preset option')).toContainText(['新しい設定', '修正した設定（版2）']);
-    const updated = await storage(next);
-    expect((updated.presetsV1 as { version: number }[])[0].version).toBe(preset.version + 1);
-    await restarted.source.locator('#transactions th').first().evaluate(cell => { cell.textContent = '変更されたID'; });
-    await next.locator('#scan').click();
-    await expect(next.locator('#status')).toContainText(/(?:範囲|表).*選/);
-    await next.locator('#table').selectOption('1');
-    await next.locator('#preset').selectOption(preset.id);
-    await next.locator('#apply-preset').click();
-    await expect(next.locator('#preset-status')).toContainText('構造が一致しません');
-    expect(await storage(next)).toEqual(updated);
-    await next.locator('#delete-preset').click();
-    await expect(next.locator('#preset-status')).toContainText('選んだ設定を削除しました');
-    expect(await storage(next)).toEqual({ presetsV1: [] });
-    await expect(next.locator('#preview tbody tr')).toHaveCount(8);
-  } finally { await restarted.context.close(); }
+  await expect(page.locator('#summary')).toContainText('取得 8件 / 出力 8件・6列');
+  await expect(page.locator('#preview tbody tr').first().locator('td').nth(2)).toContainText('01/02/2026');
+  await page.locator('#preview tbody tr').first().locator('td').nth(2).getByRole('button').click();
+  await expect(page.locator('#cell-detail .cell-line')).toHaveText(['元の文字列：01/02/2026', '表の値：01/02/2026', 'CSV値：01/02/2026']);
+  await expect(page.locator('#confirm')).toBeEnabled(); expect(await storage(page)).toEqual({});
 });
 
 test('service worker stop does not own transaction memory; reload loses transactions instead of restoring them', async ({ harness }) => {
@@ -267,7 +226,7 @@ test('service worker stop does not own transaction memory; reload loses transact
   expect(await storage(page)).toEqual({});
 });
 
-test('stop immediately invalidates an in-flight acquisition; no automatic resume or stale preview appears', async ({ harness }) => {
+test('stop cancels an in-flight acquisition while preserving the prior table; no stale replacement appears', async ({ harness }) => {
   const page = harness.workspace;
   await configureGolden(page);
   const started = performance.now();
@@ -275,9 +234,9 @@ test('stop immediately invalidates an in-flight acquisition; no automatic resume
     (document.querySelector('#capture') as HTMLButtonElement).click();
     (document.querySelector('#stop') as HTMLButtonElement).click();
   });
-  await expect(page.locator('#summary')).toHaveText('処理を中止しました。再取得してください。');
+  await expect(page.locator('#status')).toContainText(/中止/);
   expect(performance.now() - started).toBeLessThan(1000);
-  await expect(page.locator('#preview tbody tr')).toHaveCount(0);
+  await expect(page.locator('#preview tbody tr')).toHaveCount(8);
   await expect(page.locator('#save')).toBeDisabled();
   // Let the pending injection settle without relying on a blind sleep.
   await expect(page.locator('#capture')).toBeEnabled();
@@ -334,14 +293,15 @@ test('fixed 1,000 by 30 browser workload is measured, paginated and bounded with
     // real acquisition/worker/render cycle to release its control first.
     await expect(page.locator('#capture')).toBeEnabled();
     await expect(page.locator('#preview')).toHaveAttribute('aria-busy', 'false');
-    await expect(page.locator('#summary')).toContainText('取得 1000件 / 出力 1000件 / 選択 30列');
+    await expect(page.locator('#summary')).toContainText('取得 1000件 / 出力 1000件・30列');
     elapsed.push(performance.now() - start);
   }
   expect(elapsed.filter(value => value < 3000).length).toBeGreaterThanOrEqual(19);
   await expect(page.locator('#preview tbody tr')).toHaveCount(100);
   await page.locator('#next').click();
   await expect(page.locator('#page')).toContainText('2 / 10');
-  await expect(page.locator('#preview tbody tr').first().locator('td').first()).toHaveText('101');
+  await expect(page.locator('#preview tbody tr').first().locator('td').first()).toContainText('元の行101');
+  await expect(page.locator('#preview tbody tr').first().locator('td').first().getByRole('button')).toHaveAccessibleName('元の行101を除外');
   const measurements = testInfo.outputPath('fixed-workload-measurements.json');
   await writeFile(measurements, JSON.stringify({ fixture: 'synthetic 1,000 data rows × 30 text columns', browser: harness.context.browser()?.version(), host: host(), trials: 20, milliseconds: elapsed, budgetMilliseconds: 3000, requiredPassingTrials: 19, measurement: 'UI click through real scripting, Worker and first 100-row preview render; 20 trials on this host only' }, null, 2));
   await testInfo.attach('fixed-workload-measurements', { path: measurements, contentType: 'application/json' });
@@ -354,7 +314,13 @@ test('fixed 1,000 by 30 browser workload is measured, paginated and bounded with
   await page.locator('#scan').click();
   await expect(page.locator('#table option[value="1"]')).toHaveJSProperty('disabled', true);
   await expect(page.locator('#table option[value="1"]')).toContainText('5,000行');
-  await expect(page.locator('#capture')).toBeDisabled();
+  // Scanning never discards a good captured snapshot. Explicit re-reading of
+  // the now oversized table must fail, retaining the old 1,000 rows unchanged.
+  await page.locator('#capture').click();
+  await expect(page.locator('#status')).toContainText('5,000行');
+  await expect(page.locator('#summary')).toContainText('取得 1000件 / 出力 1000件・30列');
+  await expect(page.locator('#preview tbody tr')).toHaveCount(100);
+  await expect(page.locator('#preview tbody tr').first().locator('.cell-value').first()).toHaveText('100:0');
   await expect(page.locator('#save')).toBeDisabled();
 });
 
@@ -392,16 +358,20 @@ async function contentSource(harness: Harness): Promise<void> {
 
 async function pickSource(harness: Harness, selector: string, content = false): Promise<void> {
   const { source, workspace } = harness;
+  await source.locator(selector).scrollIntoViewIfNeeded();
   await workspace.bringToFront();
   if (content) await workspace.locator('#pick-kind').selectOption('content');
   await workspace.locator('#pick').click();
   await source.bringToFront();
   // Padding targets the actual article/card container rather than its child
   // heading. Other selectors exercise their exact visible HTML element.
-  const position = ['#article', '#card', '#aria-grid'].includes(selector) ? { x: 8, y: 8 } : undefined;
-  await source.locator(selector).hover({ ...(position ? { position } : {}) });
+  const position = ['#article', '#card', '#aria-grid', '#mixed'].includes(selector) ? { x: 8, y: 8 } : undefined;
+  const bounds = await source.locator(selector).boundingBox();
+  expect(bounds).not.toBeNull();
+  const point = { x: bounds!.x + (position?.x ?? bounds!.width / 2), y: bounds!.y + (position?.y ?? bounds!.height / 2) };
+  await source.mouse.move(point.x, point.y);
   await expect(source.locator('[data-transaction-to-excel-picker]')).toBeVisible();
-  await source.locator(selector).click({ ...(position ? { position } : {}) });
+  await source.mouse.click(point.x, point.y);
   await expect(source.locator('[data-transaction-to-excel-picker]')).toHaveCount(0);
   await workspace.bringToFront();
 }
@@ -412,7 +382,7 @@ async function contentPreview(page: Page, expected: string[][], headers = conten
   const observed = await page.locator('#preview tbody tr').evaluateAll(rows => rows.map(row => Array.from(row.querySelectorAll('td')).slice(1).map(cell => cell.querySelector('.cell-value')?.textContent)));
   expect(observed).toEqual(expected.map(row => row.map(displayedValue)));
   expect(await previewNames(page)).toEqual(headers);
-  await expect(page.locator('#summary')).toContainText(`取得 ${expected.length}件 / 出力 ${expected.length}件 / 選択 ${headers.length}列`);
+  await expect(page.locator('#summary')).toContainText(`取得 ${expected.length}件 / 出力 ${expected.length}件・${headers.length}列`);
   await expect(page.locator('#confirm')).toBeEnabled();
 }
 
@@ -426,7 +396,7 @@ test('page content: whole body preview and real saved CSV bytes preserve visible
   const session = await harness.context.newCDPSession(workspace);
   await session.send('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: downloadDirectory, eventsEnabled: true });
   await workspace.locator('#save').click();
-  await expect(workspace.locator('#save-status')).toContainText('保存完了を照合しました');
+  await expect(workspace.locator('#save-status')).toContainText('CSVを保存しました');
   const record = await storage(workspace);
   const downloadId = (record.saveAttemptV1 as { downloadId: number }).downloadId;
   const files = await workspace.evaluate(id => chrome.downloads.search({ id }), downloadId);
@@ -478,7 +448,8 @@ test('range picker: Escape cleans the page and a restarted selection captures on
   const { source, workspace } = harness;
   await contentSource(harness);
   await workspace.locator('#pick').click(); await source.bringToFront();
-  await source.locator('#article').hover({ position: { x: 8, y: 8 } });
+  const bounds = await source.locator('#article').boundingBox();
+  expect(bounds).not.toBeNull(); await source.mouse.move(bounds!.x + 8, bounds!.y + 8);
   await expect(source.locator('[data-transaction-to-excel-picker]')).toBeVisible();
   await source.keyboard.press('Escape');
   await expect(source.locator('[data-transaction-to-excel-picker]')).toHaveCount(0);
@@ -502,17 +473,16 @@ test('narrow panel: 320px layout keeps page controls and confirmation within the
   }
 });
 
-test('new document: capture after source navigation cannot apply the old selected range or leave a saveable stale preview', async ({ harness }) => {
+test('new document: explicit re-read refuses an obsolete range while keeping the previously captured table editable', async ({ harness }) => {
   await contentSource(harness); await pickSource(harness, '#article');
   await contentPreview(harness.workspace, articleRows, articleHeader);
   await harness.workspace.locator('#confirm').check();
-  await harness.source.goto(fixtureUrl);
-  await harness.workspace.bringToFront();
+  await harness.source.goto(fixtureUrl); await harness.workspace.bringToFront();
   await harness.workspace.locator('#capture').click();
-  await expect(harness.workspace.locator('#preview tbody tr')).toHaveCount(0);
-  await expect(harness.workspace.locator('#confirm')).not.toBeChecked();
-  await expect(harness.workspace.locator('#save')).toBeDisabled();
+  await contentPreview(harness.workspace, articleRows, articleHeader);
   await expect(harness.workspace.locator('#status')).toContainText(/変わ|見つ|取得|文書/);
+  await editColumn(harness.workspace, 2); await harness.workspace.locator('#column-name').fill('継続する章');
+  await expect(harness.workspace.locator('#preview thead')).toContainText('継続する章');
   expect(await storage(harness.workspace)).toEqual({});
 });
 
@@ -554,20 +524,12 @@ const mixedRows = [
 test('structured mixed range: all paragraphs and differently shaped tables remain separate cells in DOM order', async ({ harness }) => {
   await harness.source.setContent(await readFile(resolve('tests/fixtures/structured-browser.html'), 'utf8'));
   await harness.workspace.locator('#scan').click();
-  await harness.workspace.locator('#pick-kind').selectOption('content');
-  await harness.workspace.locator('#pick').click();
-  await harness.source.bringToFront();
-  await harness.source.locator('#mixed').hover({ position: { x: 8, y: 8 } });
-  await expect(harness.source.locator('[data-transaction-to-excel-picker]')).toBeVisible();
-  await harness.source.locator('#mixed').click({ position: { x: 8, y: 8 } });
-  await harness.workspace.bringToFront();
+  await pickSource(harness, '#mixed', true);
   await contentPreview(harness.workspace, mixedRows, mixedHeaders);
   expect(await harness.workspace.locator('#preview').innerText()).not.toMatch(/do-not-capture|400 W|ノート/);
-  // Generic composite columns are text: one slot may contain a heading and
-  // later a numeric value, so converting that whole slot would be misleading.
+  // Every initial slot is literal text; conversion settings are deferred.
   await editColumn(harness.workspace, 2);
-  await expect(harness.workspace.locator('#column-kind')).toBeDisabled();
-  await expect(harness.workspace.locator('#column-kind')).toHaveValue('text');
+  await expect(harness.workspace.locator('#column-kind, #column-required')).toHaveCount(0);
   expect(await storage(harness.workspace)).toEqual({});
 });
 
@@ -624,7 +586,7 @@ test('initial table adjustments: headers rename, move, hide and restore while pr
   const cellDetail = workspace.locator('#preview tbody tr').first().locator('td').nth(3).getByRole('button');
   await cellDetail.click();
   await assertPanelVisibleWithoutAnotherAction(workspace, 'cell-detail');
-  await expect(workspace.locator('#cell-detail .cell-line')).toHaveText(['元値：400 W', '変換後：400 W', 'CSV値：400 W']);
+  await expect(workspace.locator('#cell-detail .cell-line')).toHaveText(['元の文字列：400 W', '表の値：400 W', 'CSV値：400 W']);
   await workspace.locator('#cell-detail').getByRole('button', { name: '閉じる', exact: true }).click();
   await expect(workspace.locator('#cell-detail')).toBeHidden();
   await expect(cellDetail).toBeFocused();
@@ -653,8 +615,12 @@ const hierarchyCsv = '\uFEFF"H1","H2","小見出し","内容"\r\n'
 test('document hierarchy: initial H1-H3 columns own section bodies, remain editable and save exact CSV bytes', async ({ harness }, testInfo) => {
   const { source, workspace, downloadDirectory } = harness;
   await source.goto(`${new URL(fixtureUrl).origin}/document-hierarchy`);
-  await workspace.bringToFront();
-  await workspace.locator('#scan').click();
+  // This direct test route intentionally omits native source observers. Reload
+  // its workspace to bind the new document; native reactivation is tested in
+  // editor-rework through real tab listeners and synthetic session activation.
+  await workspace.reload(); await workspace.bringToFront();
+  await expect(workspace.locator('#pick')).toBeEnabled();
+  await workspace.locator('details.source-options > summary').click();
   await expect(workspace.locator('#page-content')).toBeEnabled();
   await workspace.locator('#page-content').click();
   // No second acquisition click: the first visible table must be structured.
@@ -674,7 +640,7 @@ test('document hierarchy: initial H1-H3 columns own section bodies, remain edita
   const session = await harness.context.newCDPSession(workspace);
   await session.send('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: downloadDirectory, eventsEnabled: true });
   await workspace.locator('#save').click();
-  await expect(workspace.locator('#save-status')).toContainText('保存完了を照合しました');
+  await expect(workspace.locator('#save-status')).toContainText('CSVを保存しました');
   const record = await storage(workspace);
   const downloadId = (record.saveAttemptV1 as { downloadId: number }).downloadId;
   const files = await workspace.evaluate(id => chrome.downloads.search({ id }), downloadId);

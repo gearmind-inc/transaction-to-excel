@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { screen, sourceUrl } from './workspace-harness';
-import { EXPECTED_CAPTURE, EXPECTED_CSV, EXPECTED_PREVIEW, HEADERS } from './fixtures/expected';
+import { screen } from './workspace-harness';
+import { EXPECTED_CAPTURE, HEADERS } from './fixtures/expected';
 import { parseCsv } from './oracle';
 import type { TableCandidate } from '../src/contracts';
 
@@ -59,7 +59,7 @@ test('range selection automatically captures all fields and displays one initial
   } finally { ui.dom.window.close(); }
 });
 
-test('table header adjustments update names, order, types and exclusions from the same snapshot and produce fixed CSV bytes', async () => {
+test('table header adjustments update names, order and exclusions without converting original values and produce fixed CSV bytes', async () => {
   const ui = await screen();
   try {
     await automatic(ui);
@@ -67,17 +67,35 @@ test('table header adjustments update names, order, types and exclusions from th
     for (const [index, name] of [[0, '取引ID'], [1, '日付'], [2, '内容'], [3, '取引額'], [4, '任意メモ']] as const) {
       openColumn(ui, index); change(ui, 'column-name', name, 'input');
     }
-    openColumn(ui, 1); change(ui, 'column-kind', 'date'); change(ui, 'date-input', 'YYYY/MM/DD');
-    openColumn(ui, 3); change(ui, 'column-kind', 'amount'); change(ui, 'amount-symbol', '¥'); change(ui, 'amount-grouping', ',');
     openColumn(ui, 0); ui.button('column-right').click(); ui.button('column-right').click(); ui.button('column-right').click();
     await current(ui);
     assert.equal(ui.calls.length, 2, 'column changes must not read a changing web page again');
-    assert.deepEqual(values(ui), EXPECTED_PREVIEW.rows.map(row => row.map(cell => cell.logical === '' ? '［空欄］' : cell.logical)));
+    const expectedRows = [
+      ['2026/10/01', '日本語,"引用"\n二行目', '¥1,234.50', '00001', ''],
+      ['2024/02/29', '=SUM(1,2)', '-¥330', '12345678901234567890', '0'],
+      ['2026/10/02', '+81-90-0000', '¥0', '00003', ''],
+      ['2026/10/02', '@name', '¥12.00', '00004', ''],
+      ['2026/10/03', ' \t＝1+2', '¥00001.2300', '00005', ''],
+      ['2026/10/04', '同値の別取引', '¥20.00', '00777', ''],
+      ['2026/10/04', '同値の別取引', '¥20.00', '00777', ''],
+      ['2026/10/05', '-1+2', '-¥0.50', '00008', '備考'],
+    ];
+    assert.deepEqual(values(ui), expectedRows.map(row => row.map(value => value || '［空欄］')));
     assert.ok(!node(ui, 'preview').textContent?.includes('do-not-capture-excluded'), 'excluded values must disappear from the output table');
     const confirm = node<HTMLInputElement>(ui, 'confirm'); confirm.checked = true; confirm.dispatchEvent(new ui.win.Event('change'));
     ui.deferDigest(); ui.button('save').click(); await ui.waitForDigest(1);
-    assert.deepEqual(Array.from(ui.digestCalls[0].bytes), Array.from(new TextEncoder().encode(EXPECTED_CSV)), 'the held bytes must match the independent literal oracle');
-    assert.deepEqual(parseCsv(ui.digestCalls[0].bytes), [EXPECTED_PREVIEW.headers, ...EXPECTED_PREVIEW.rows.map(row => row.map(cell => cell.output))]);
+    const expectedCsv = [
+      ['日付', '内容', '取引額', '取引ID', '任意メモ'],
+      ['2026/10/01', '日本語,"引用"\n二行目', '¥1,234.50', '00001', ''],
+      ['2024/02/29', '\t=SUM(1,2)', '\t-¥330', '12345678901234567890', '0'],
+      ['2026/10/02', '\t+81-90-0000', '¥0', '00003', ''],
+      ['2026/10/02', '\t@name', '¥12.00', '00004', ''],
+      ['2026/10/03', '\t \t＝1+2', '¥00001.2300', '00005', ''],
+      ['2026/10/04', '同値の別取引', '¥20.00', '00777', ''],
+      ['2026/10/04', '同値の別取引', '¥20.00', '00777', ''],
+      ['2026/10/05', '\t-1+2', '\t-¥0.50', '00008', '備考'],
+    ];
+    assert.deepEqual(parseCsv(ui.digestCalls[0].bytes), expectedCsv, 'independent reader must preserve raw dates, currency and every protected cell');
     assert.equal(ui.downloads.length, 0, 'digest verification here is not a claim of native file saving');
     ui.digestCalls[0].resolve();
     await wait(ui, () => ui.downloads.length === 1 && (ui.stored.saveAttemptV1 as { downloadId?: number } | undefined)?.downloadId === 91, 'the mock save must settle before closing its UI');
@@ -96,6 +114,7 @@ test('excluded columns can be restored without reacquisition, including when eve
     await wait(ui, () => ui.win.document.querySelectorAll('#preview tbody tr').length === 0, 'excluding all columns must show no output rows');
     assert.equal(ui.button('save').disabled, true);
     assert.equal(node<HTMLInputElement>(ui, 'confirm').disabled, true);
+    assert.equal(ui.button('resume').hidden, true, 'excluding all columns requires restoration, rather than retrying a Worker');
     const restored = ui.win.document.querySelector<HTMLButtonElement>('#hidden-columns button[data-restore-index="0"]');
     assert.ok(restored, 'the last excluded field must remain recoverable'); restored.click(); await current(ui);
     assert.deepEqual(values(ui), rawRows.map(row => [row[0]]));
@@ -113,7 +132,7 @@ test('normal cells show one value; requested details retain original, converted 
     assert.equal(cell.querySelectorAll('.cell-line').length, 0, 'three-stage values must not repeat in every normal cell');
     const detail = cell.querySelector('button'); assert.ok(detail); detail.click();
     const lines = Array.from(node(ui, 'cell-detail').querySelectorAll('.cell-line')).map(line => line.textContent);
-    assert.deepEqual(lines, ['元値：=SUM(1,2)', '変換後：=SUM(1,2)', 'CSV値：⟦TAB⟧=SUM(1,2)']);
+    assert.deepEqual(lines, ['元の文字列：=SUM(1,2)', '表の値：=SUM(1,2)', 'CSV値：⟦TAB⟧=SUM(1,2)']);
     assert.match(node(ui, 'cell-detail').textContent ?? '', /保護用タブ/);
   } finally { ui.dom.window.close(); }
 });
@@ -125,12 +144,9 @@ test('composite tables preserve local header rows and padding, allowing layout e
     const rows = [['見出し', '本文', ''], ['日付', '金額', 'メモ'], ['2026/10/01', '¥1,200', 'A'], ['概要', '説明', '']];
     await automatic(ui, mixed, rows);
     openColumn(ui, 0);
-    assert.equal(node<HTMLSelectElement>(ui, 'column-kind').disabled, true, 'unrelated local table columns cannot share one global date/amount type');
-    const required = node<HTMLInputElement>(ui, 'column-required'); assert.equal(required.disabled, true);
-    required.checked = true; required.dispatchEvent(new ui.win.Event('change'));
-    assert.equal(required.checked, false, 'composite padding must not turn into a global required-field error');
-    change(ui, 'column-kind', 'date'); change(ui, 'column-name', '1列目', 'input'); await current(ui);
-    assert.equal(node<HTMLSelectElement>(ui, 'column-kind').value, 'text', 'queued type events must also respect composite text-only output');
+    assert.equal(ui.win.document.getElementById('column-kind'), null, 'all MVP output keeps original text');
+    assert.equal(ui.win.document.getElementById('column-required'), null, 'padding remains legitimate empty text');
+    change(ui, 'column-name', '1列目', 'input'); await current(ui);
     assert.deepEqual(values(ui), rows.map(row => row.map(value => value || '［空欄］')));
     assert.equal(ui.calls.length, 2);
   } finally { ui.dom.window.close(); }
@@ -165,22 +181,16 @@ test('automatic defaults make empty, duplicate and very long source headers usab
   } finally { ui.dom.window.close(); }
 });
 
-test('preset application recalculates the held snapshot and retains original signature without source values in storage', async () => {
+test('structural edits keep the original content identity without persisting transaction values', async () => {
   const ui = await screen();
   try {
     const content = { index: 0, key: 'content:id:manual', kind: 'content', headers: ['項目', '値'], rowCount: 1, contentSignature: 'visible-labels-v1' } as TableCandidate;
     await automatic(ui, content, [['対象', 'CSV']]);
     openColumn(ui, 1); change(ui, 'column-name', '説明', 'input'); await current(ui);
-    change(ui, 'preset-name', '本文の設定', 'input'); ui.button('save-preset').click(); await ui.waitForWrites(1);
-    await wait(ui, () => !ui.button('save-preset').disabled, 'preset saving must complete');
-    const saved = ui.settings()![0];
-    assert.equal(saved.contentSignature, content.contentSignature);
-    assert.equal(saved.origin, new URL(sourceUrl).origin);
-    assert.ok(!JSON.stringify(ui.stored).includes('CSV'), 'preset metadata must not store row values');
-    openColumn(ui, 1); change(ui, 'column-name', '変更', 'input'); await current(ui);
-    change(ui, 'preset', saved.id); ui.button('apply-preset').click(); await current(ui);
-    openColumn(ui, 1); assert.equal(node<HTMLInputElement>(ui, 'column-name').value, '説明');
-    assert.equal(ui.calls.length, 2, 'preset application must use the held capture');
+    assert.deepEqual(values(ui), [['対象', 'CSV']]);
+    assert.equal(ui.workerCalls.at(-1)!.request.capture.contentSignature, content.contentSignature);
+    assert.equal(ui.calls.length, 2, 'edits use only the held capture');
     assert.equal(node<HTMLInputElement>(ui, 'confirm').checked, false);
+    assert.deepEqual(ui.stored, {}, 'the editor never persists values or settings');
   } finally { ui.dom.window.close(); }
 });

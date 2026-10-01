@@ -1,4 +1,5 @@
 import { LIMITS, type Capture, type CellPreview, type ColumnConfig, type DateFormat, type Preview } from './contracts.js';
+import { countMatrixChars } from './text-budget.js';
 
 const DATE_PATTERNS: Record<DateFormat, RegExp> = {
   'YYYY-MM-DD': /^(\d{4})-(\d{2})-(\d{2})$/,
@@ -147,12 +148,10 @@ export function buildPreview(capture: Capture, columns: ColumnConfig[]): Preview
       || !['text', 'date', 'amount'].includes(column.kind) || typeof column.required !== 'boolean')
     || new Set(columns.map(column => column.sourceIndex)).size !== columns.length
     || new Set(columns.map(column => column.outputName)).size !== columns.length) throw new Error('取得列・出力列名・列の型を確認してください。取得列と出力列名の重複は使えません。');
-  let textChars = 0;
   for (const row of capture.rows) {
     if (!Array.isArray(row) || row.length !== capture.sourceIndexes.length || row.some(value => typeof value !== 'string' || value.length > LIMITS.cellChars)) throw new Error('取得結果の行・列・値が不正です。元ページから再取得してください。');
-    textChars += row.reduce((total, value) => total + value.length, 0);
   }
-  if (textChars > LIMITS.textChars) throw new Error('取得した文字数が処理上限を超えています。');
+  if (countMatrixChars(capture.headers, capture.rows) > LIMITS.textChars) throw new Error('取得した文字数が処理上限を超えています。');
   const preview: Preview = { headers: [], rows: [], sourceCount: capture.rows.length, emptyCount: 0, errorCount: 0, protectionCount: 0, scope: capture.scope, requestId: capture.requestId };
   for (const column of columns) {
     const error = textProblem(column.outputName);
@@ -170,5 +169,6 @@ export function buildPreview(capture: Capture, columns: ColumnConfig[]): Preview
     if (cell.protection) preview.protectionCount++;
     return cell;
   }));
+  if (countMatrixChars(columns.map(column => column.outputName), preview.rows.map(row => row.map(cell => cell.raw))) > LIMITS.textChars) throw new Error('出力する文字数が処理上限を超えています。列名を短くするか、出力する行または列を減らしてください。');
   return preview;
 }

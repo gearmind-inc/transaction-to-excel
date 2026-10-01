@@ -40,12 +40,58 @@ export function inspectPage(request: InspectRequest): InspectResult {
     return structurallyShown(element) && style.visibility !== 'hidden' && style.visibility !== 'collapse';
   }
 
+  // Shared by ordinary tables and content ranges. Light-DOM helpers without
+  // a slot are not rendered; native text geometry also covers closed roots.
+  function documentElement(element: Element): boolean {
+    if (!structurallyShown(element)) return false;
+    for (let child: Element | null = element; child; child = child.parentElement) {
+      const parent: Element | null = child.parentElement;
+      if (parent?.shadowRoot && !child.assignedSlot) return false;
+    }
+    return true;
+  }
+
+  function documentText(node: Node): boolean {
+    if (!node.parentElement || !documentElement(node.parentElement) || !shown(node.parentElement)) return false;
+    const range = document.createRange();
+    // DOM-only evaluators have no layout. Browser checks cover this branch.
+    if (typeof range.getClientRects !== 'function') return true;
+    range.selectNodeContents(node);
+    // No viewport intersection: loaded offscreen text is part of the range.
+    return Array.from(range.getClientRects()).some(rect => rect.width > 0 || rect.height > 0);
+  }
+
+  function renderedContents(element: Element): boolean {
+    if (!documentElement(element)) return false;
+    const range = document.createRange();
+    if (typeof range.getClientRects !== 'function') return true;
+    range.selectNodeContents(element);
+    return [...Array.from(element.getClientRects()), ...Array.from(range.getClientRects())].some(rect => rect.width > 0 || rect.height > 0);
+  }
+
+  function visibleStructure(element: Element): boolean {
+    return shown(element) && renderedContents(element);
+  }
+
+  const shadowWarning = '部品の内側（Shadow DOM）の表示は、この取得結果に含まれません。';
+  function componentWarnings(root: Element): string[] {
+    // A closed root is deliberately opaque. A custom element may contain one,
+    // so disclose the boundary without reading its internal state or content.
+    return [root, ...Array.from(root.querySelectorAll('*'))].some(element => {
+      if (!element.shadowRoot && !element.localName.includes('-')) return false;
+      // A contents host has no box or light-DOM text geometry even when its
+      // closed internals render. Keep structural/CSS visibility checks.
+      return shown(element) && documentElement(element) &&
+        (styleOf(element).display === 'contents' || renderedContents(element));
+    }) ? [shadowWarning] : [];
+  }
+
   function readText(cell: Element): string {
     const pieces: string[] = [];
     let length = 0;
     function visit(node: Node): void {
       if (node.nodeType === 3) {
-        if (node.parentElement && !shown(node.parentElement)) return;
+        if (!documentText(node)) return;
         const value = node.nodeValue ?? '';
         length += value.length;
         if (length > fixedLimits.cellChars) stop('1セルの文字数が安全上限（10,000文字）を超えています。取得を止めました。');
@@ -53,9 +99,9 @@ export function inspectPage(request: InspectRequest): InspectResult {
       } else if (node.nodeType === 1) {
         const element = node as Element;
         const tag = element.tagName.toLowerCase();
-        if (!structurallyShown(element) || ['script', 'style', 'template', 'noscript', 'input', 'select', 'textarea'].includes(tag)) return;
+        if (!documentElement(element) || ['script', 'style', 'template', 'noscript', 'input', 'select', 'textarea'].includes(tag)) return;
         if (tag === 'br') {
-          if (!shown(element)) return;
+          if (!visibleStructure(element)) return;
           length++;
           if (length > fixedLimits.cellChars) stop('1セルの文字数が安全上限（10,000文字）を超えています。取得を止めました。');
           pieces.push('\n');
@@ -217,7 +263,7 @@ export function inspectPage(request: InspectRequest): InspectResult {
   function readContent(root: Element): { headers: string[]; rows: string[][]; warnings: string[]; contentSignature: string; label: string; layout?: 'composite' } {
     type Block = { kind: 'prose' | 'table' | 'records'; key: string; headers: string[]; rows: string[][]; shape?: number[][] };
     const blocks: Block[] = [];
-    const warnings = new Set<string>();
+    const warnings = new Set<string>(componentWarnings(root));
     type Heading = { level: number; text: string };
     type Event = { type: 'heading'; heading: Heading }
       | { type: 'fragment'; text: string }
@@ -234,39 +280,6 @@ export function inspectPage(request: InspectRequest): InspectResult {
     let hasMatrix = false;
     let documentCandidate = false;
     let legacyActive = false;
-
-    // Light-DOM helpers without a slot are not rendered. Native text geometry
-    // also covers closed shadow roots, whose internals are intentionally opaque.
-    function documentElement(element: Element): boolean {
-      if (!structurallyShown(element)) return false;
-      for (let child: Element | null = element; child; child = child.parentElement) {
-        if (child.getAttribute('aria-hidden') === 'true') return false;
-        const parent: Element | null = child.parentElement;
-        if (parent?.shadowRoot && !child.assignedSlot) return false;
-      }
-      return true;
-    }
-
-    function documentText(node: Node): boolean {
-      if (!node.parentElement || !documentElement(node.parentElement) || !shown(node.parentElement)) return false;
-      const range = document.createRange();
-      if (typeof range.getClientRects !== 'function') return true;
-      range.selectNodeContents(node);
-      // No viewport intersection: loaded offscreen text is part of the range.
-      return Array.from(range.getClientRects()).some(rect => rect.width > 0 || rect.height > 0);
-    }
-
-    function renderedContents(element: Element): boolean {
-      if (!documentElement(element)) return false;
-      const range = document.createRange();
-      if (typeof range.getClientRects !== 'function') return true;
-      range.selectNodeContents(element);
-      return [...Array.from(element.getClientRects()), ...Array.from(range.getClientRects())].some(rect => rect.width > 0 || rect.height > 0);
-    }
-
-    function visibleStructure(element: Element): boolean {
-      return shown(element) && renderedContents(element);
-    }
 
     function svgTexts(element: Element): Element[] {
       return Array.from(element.querySelectorAll('text')).filter(text => !text.closest('defs, symbol, clipPath, mask, pattern') && shown(text));
@@ -291,7 +304,7 @@ export function inspectPage(request: InspectRequest): InspectResult {
         if (!(documentVisibility ? documentElement(element) : structurallyShown(element)) || excluded.has(tag)) return;
         if (formControls.has(tag)) { if (shown(element)) warnings.add(formWarning); return; }
         if (!shown(element)) { for (const child of Array.from(element.childNodes)) visit(child); return; }
-        if (tag === 'br') { pieces.push('\n'); return; }
+        if (tag === 'br') { if (visibleStructure(element)) pieces.push('\n'); return; }
         if (tag === 'canvas' || tag === 'img' || tag === 'video' || tag === 'audio' || tag === 'object' || tag === 'embed') {
           warnings.add('画像・Canvasなどの図形や映像は文字へ変換していません。表示文字だけを取り込みます。');
           return;
@@ -604,7 +617,6 @@ export function inspectPage(request: InspectRequest): InspectResult {
           return;
         }
       }
-      if (element.shadowRoot) warnings.add('部品の内側（Shadow DOM）の表示は、この取得結果に含まれません。');
       if (repeated(element)) return;
       walkContainer(element);
     }
@@ -700,13 +712,15 @@ export function inspectPage(request: InspectRequest): InspectResult {
     const candidate: TableCandidate = { index, key: tableKey(table), headers: [], rowCount: 0 };
     try {
       if (table.parentElement?.closest('table') || table.querySelector('table')) stop('入れ子の表には対応していません。別の通常HTML表を選んでください。');
-      if (!shown(table)) stop('非表示の表は取得できません。表示された表を選んでください。');
+      if (!visibleStructure(table)) stop('非表示の表は取得できません。表示された表を選んでください。');
       if (table.querySelector('form, input, select, textarea, button')) stop('入力部品を含む表は取得しません。入力欄のない表を選んでください。');
       if (!table.rows.length) stop('見出し行がありません。見出し付きの表を選んでください。');
-      const grid = tableGrid(table, readText, shown, true);
+      const grid = tableGrid(table, readText, visibleStructure, true);
       candidate.rowCount = grid.rows.length;
       candidate.headers = grid.headers;
-      if (grid.mergedData) candidate.warnings = ['結合セルは左上の値を取り込み、続きのセルは空欄にしています。値を反復していません。'];
+      const warnings = componentWarnings(table);
+      if (grid.mergedData) warnings.push('結合セルは左上の値を取り込み、続きのセルは空欄にしています。値を反復していません。');
+      if (warnings.length) candidate.warnings = warnings;
     } catch (error) {
       candidate.error = error instanceof Error ? error.message : '表の構造を確認できませんでした。';
     }
@@ -790,8 +804,9 @@ export function inspectPage(request: InspectRequest): InspectResult {
       return result;
     }
     if (!request.sourceIndexes?.length || request.sourceIndexes.some(index => index >= candidate.headers.length)) stop('取得する列を1つ以上、重複なく選んでください。');
-    let textCount = 0;
-    const grid = tableGrid(table, readText, shown, true);
+    // The header row is part of the same logical matrix budget as content.
+    let textCount = candidate.headers.reduce((sum, header) => sum + header.length, 0);
+    const grid = tableGrid(table, readText, visibleStructure, true);
     const rows = grid.rows.map(row => request.sourceIndexes!.map(index => {
       const value = row[index] ? readText(row[index]!) : '';
       textCount += value.length;

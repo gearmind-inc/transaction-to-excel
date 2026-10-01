@@ -44,6 +44,8 @@ export async function screen(options: ScreenOptions = {}) {
   const updatedListeners: Array<(id: number, change: chrome.tabs.OnUpdatedInfo, tab: Partial<chrome.tabs.Tab>) => void> = [];
   const removedListeners: Array<(id: number, info: { windowId: number; isWindowClosing: boolean }) => void> = [];
   const downloads: Array<{ url: string; filename: string }> = [];
+  const downloadListeners: Array<(change: { id: number }) => void> = [];
+  let downloadState: 'in_progress' | 'complete' | 'interrupted' = 'in_progress', downloadError: string | undefined;
   const downloadSearches: number[] = [];
   const tabUpdates: number[] = [];
   const tabLookups: TabLookup[] = [];
@@ -51,6 +53,7 @@ export async function screen(options: ScreenOptions = {}) {
   const digestCalls: Array<{ bytes: Uint8Array; resolve(): void }> = [];
   const workerCalls: WorkerCall[] = [];
   let activeTabId = options.activation?.tabId ?? 7;
+  const tabUrls = new Map<number, string>();
   let deferredDigest = false;
   let deferredWrites = false;
   let deferredWorkers = false;
@@ -125,13 +128,17 @@ export async function screen(options: ScreenOptions = {}) {
         }),
       } },
       downloads: {
-        onChanged: { addListener() {}, removeListener() {} },
-        download: async (value: { url: string; filename: string }) => { downloads.push(value); return 91; },
-        search: async ({ id }: { id: number }) => { downloadSearches.push(id); return downloadMissing ? [] : [{ id, state: 'in_progress' }]; },
+        onChanged: {
+          addListener: (listener: typeof downloadListeners[number]) => downloadListeners.push(listener),
+          removeListener: (listener: typeof downloadListeners[number]) => { const index = downloadListeners.indexOf(listener); if (index >= 0) downloadListeners.splice(index, 1); },
+        },
+        download: async (value: { url: string; filename: string }) => { downloads.push(value); downloadState = 'in_progress'; downloadError = undefined; return 91; },
+        search: async ({ id }: { id: number }) => { downloadSearches.push(id); return downloadMissing ? [] : [{ id, state: downloadState, ...(downloadError ? { error: downloadError } : {}) }]; },
+        cancel: async () => { downloadState = 'interrupted'; downloadError = 'USER_CANCELED'; },
       },
       tabs: {
         get: (id: number) => {
-          const tab = { id, windowId: 11, url: sourceUrl, active: id === activeTabId };
+          const tab = { id, windowId: 11, url: tabUrls.get(id) || sourceUrl, active: id === activeTabId };
           if (!deferredTabIds.delete(id)) return Promise.resolve(tab);
           return new Promise((resolve, reject) => { tabLookups.push({ id, resolve: () => resolve(tab), reject }); });
         },
@@ -156,7 +163,7 @@ export async function screen(options: ScreenOptions = {}) {
   }
   async function waitForWrites(count: number) {
     for (let tries = 0; tries < 30 && storageWrites.length < count; tries++) await tick();
-    assert.equal(storageWrites.length, count, 'the production preset port must issue the expected write');
+    assert.equal(storageWrites.length, count, 'the production storage port must issue the expected write');
   }
   async function waitForSessionReads(count: number) {
     for (let tries = 0; tries < 30 && sessionReads.length < count; tries++) await tick();
@@ -182,7 +189,7 @@ export async function screen(options: ScreenOptions = {}) {
   }
   function replyTables(call: Call, tables: TableCandidate[], documentId = 'current-document') {
     call.resolve([{ frameId: 0, documentId, result: {
-      schemaVersion: 1, requestId: call.request.requestId, url: sourceUrl,
+      schemaVersion: 1, requestId: call.request.requestId, url: call.request.expectedUrl,
       tables,
     } }]);
   }
@@ -207,7 +214,7 @@ export async function screen(options: ScreenOptions = {}) {
   const removeTab = (id: number, windowId = 11) => removedListeners.forEach(listener => listener(id, { windowId, isWindowClosing: false }));
   function replyCapture(call: Call, documentId = 'current-document', rows = options.rows ?? [['keep-raw-id']]) {
     call.resolve([{ frameId: 0, documentId, result: {
-      schemaVersion: 1, requestId: call.request.requestId, url: sourceUrl,
+      schemaVersion: 1, requestId: call.request.requestId, url: call.request.expectedUrl,
       capture: { schemaVersion: 1, requestId: call.request.requestId, tableKey: call.request.tableKey!, headers: [...call.request.headers!], sourceIndexes: [...call.request.sourceIndexes!], rows: rows.map(row => call.request.sourceIndexes!.map(index => row[index])), scope: 'current-page', capturedAt: '2026-10-01T00:00:00.000Z', ...(call.request.contentSignature ? { contentSignature: call.request.contentSignature } : {}), ...('layout' in call.request ? { layout: call.request.layout } : {}) },
     } }]);
   }
@@ -226,5 +233,6 @@ export async function screen(options: ScreenOptions = {}) {
     adjust.click();
     return win.document.getElementById('column-name') as HTMLInputElement;
   }
-  return { dom, win, calls, tick, waitForCalls, button, status, reply, replyTables, selectTable, previewTable, replyCapture, openColumn, stored, settings, storageWrites, waitForWrites, sessionReads, waitForSessionReads, activation, activateTab, updateTab, removeTab, digestCalls, waitForDigest, downloads, downloadSearches, missingDownload: () => { downloadMissing = true; }, tabUpdates, tabLookups, waitForTabLookups, workerCalls, waitForWorkers, deferWorkers: () => { deferredWorkers = true; }, deferTabLookup: (id: number) => { deferredTabIds.add(id); }, deferDigest: () => { deferredDigest = true; }, deferWrites: () => { deferredWrites = true; } };
+  function downloadResult(state: typeof downloadState, error?: string): void { downloadState = state; downloadError = error; downloadListeners.forEach(listener => listener({ id: 91 })); }
+  return { dom, win, calls, tick, waitForCalls, button, status, reply, replyTables, selectTable, previewTable, replyCapture, openColumn, stored, settings, storageWrites, waitForWrites, sessionReads, waitForSessionReads, activation, activateTab, updateTab, removeTab, digestCalls, waitForDigest, downloads, downloadSearches, downloadResult, setTabUrl: (id: number, url: string) => tabUrls.set(id, url), missingDownload: () => { downloadMissing = true; }, tabUpdates, tabLookups, waitForTabLookups, workerCalls, waitForWorkers, deferWorkers: () => { deferredWorkers = true; }, deferTabLookup: (id: number) => { deferredTabIds.add(id); }, deferDigest: () => { deferredDigest = true; }, deferWrites: () => { deferredWrites = true; } };
 }
