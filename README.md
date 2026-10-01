@@ -1,15 +1,98 @@
 # transaction-to-excel
 
-Planned Chrome extension for converting web transaction lists into a user-provided Excel template, with CSV as an alternative export format.
+Free, local-only Chrome Manifest V3 MVP: select one ordinary HTML table in a page you opened, choose/reorder columns, explicitly convert dates/amounts, preview original/output values, and save one UTF-8 BOM CSV.
 
-Status: planning and design only; implementation, runtime validation, and release have not started.
+No product account, paid key, server, cloud, AI, API connector, automated login or transaction archive. Sign in to the source website yourself if needed. CSV does **not** preserve Excel formatting, formulas, templates or cell types. This is a prototype; public release/universal site compatibility are not claimed.
 
-The first target is a free, single-user, local-only MVP prototype: read one selected table from the current browser page (already signed in by the user, if needed), manually configure columns and basic date/amount conversions, preview the result, and save one CSV file to the user's PC. It requires no product account, cloud service, team workspace, API connection, paid AI service, or automated login. Settings stay in local extension storage; transaction data is kept in memory during processing, not automatically archived or synced.
+## Build and load
 
-CSV is the MVP's primary output, with guidance for importing values into Excel. Simple new-workbook XLSX export and broader collection are later free-extension candidates. Existing Excel template preservation and advanced local workflows, configuration sync, team sharing, API connections, and login-flow automation are later paid-option candidates; pricing and final packaging are undecided. CSV does not preserve Excel formatting, formulas, or cell types. MVP acceptance and achievement of the full product vision are separate milestones.
+Use Node.js 24 and npm. Dependencies are pinned in the lockfile.
 
-The planned full product includes multi-page and dynamic-list collection, reusable mappings and transformation rules, previews, duplicate handling, local AI mapping suggestions, multi-sheet and multi-source output, configuration sync, team configuration sharing, read-only API integrations, and login-flow automation.
+~~~sh
+npm ci --ignore-scripts
+npm run check
+npm run package
+~~~
 
-Transaction processing and file generation are designed to run locally. Configuration sync and sharing use a separate, opt-in path; they are not transaction-upload features. Excel template preservation and CSV compatibility require validation before any support claim is made.
+1. Open chrome://extensions in desktop Chrome.
+2. Enable Developer mode, choose **Load unpacked**, and select dist/extension.
+3. Open an HTTP/HTTPS page containing a table and click the toolbar action. The workspace opens in a new tab, fixed to the original tab.
 
-Internal planning entry point: [specs/spec.md](specs/spec.md). MVP and later-release allocation: [specs/release-scope.md](specs/release-scope.md). Planning documents and agent instructions are intentionally local-only and excluded from Git, so they are not included in a fresh clone. No build or installation procedure exists yet.
+dist/transaction-to-excel-0.1.0.zip contains the same extension; extract it before loading. Build artifacts are local, not committed. Chrome 106 is the minimum API version, not a claim that all versions/OSes were tested.
+
+## Try synthetic data
+
+~~~sh
+npm run fixture
+~~~
+
+Open http://127.0.0.1:4173/transactions, click the extension, choose table 2 and exclude column 6. Eight rows include separate same-value transactions, Japanese, quotes, newline, blank/zero, negative values, long/leading-zero IDs and formula-looking strings. No real transactions.
+
+For this fixture only, set the date column to **date / YYYY/MM/DD** and amount to **amount / ¥ / comma grouping / dot decimal / leading minus**. Nothing is automatically guessed.
+
+## Workspace workflow
+
+1. Choose a table. **Check table in source page** highlights it. Only loaded rows, including off-screen rows. No next page or scroll loading.
+2. Select columns, edit names/order and explicitly choose date/amount grammars. Text is default; blanks can optionally be errors.
+3. Acquire and inspect original, logical converted and actual CSV values; row/column/blank/error/protection counts; types; capture time; current-page-only scope. Invisible characters appear as ⟦TAB⟧/⟦CR⟧/⟦LF⟧. Display is paged at 100 rows; output includes the entire capture.
+4. Fix errors and preview again. Errors block saving. Table/column-selection changes require reacquisition; other changes invalidate confirmation and require fresh preview.
+5. Confirm and save. Zero rows require explicit header-only confirmation. Choose a non-synced local folder. Existing files are not silently overwritten.
+6. Check **saved / cancelled / interrupted / unknown**. A download ID is not completion. Unknown never automatically retries. Reconcile the recorded download or select a saved CSV for digest comparison. Closing/reloading loses bytes/transactions; reconciliation restores metadata only.
+7. Save named local presets; choose/apply manually. Site/path, table identity and ordered headers must match exactly. Update increments the same preset version; delete removes that preset. Malformed settings/storage failure do not silently overwrite old settings.
+
+## Explicit formats and bounds
+
+- One visible, rectangular, top-level HTML table; first row is header, thead at most one row, remaining rows include tfoot. Duplicate/empty source headers use column position. Text nodes stay untrimmed; br becomes LF. No attribute/link/form-value reading.
+- Merged cells, nested tables, forms/inputs, uneven rows, multirow headers, frames, Shadow DOM and virtual/card lists are refused, not approximated. Explicit rowspan="1"/colspan="1" cells are ordinary cells and are accepted; rowspan="0" remains unsupported.
+- Date input: YYYY-MM-DD, YYYY/MM/DD, YYYY年M月D日, MM/DD/YYYY, DD/MM/YYYY. Output: YYYY-MM-DD or YYYY/MM/DD. Gregorian years 1–9999, real dates only; no missing-year/timezone/timestamp/era inference.
+- Amount: explicitly choose no symbol/prefix ¥,$,€/suffix 円; no/comma/dot grouping; dot/comma decimal; leading-minus/parentheses negative. Selected symbol required, valid grouping and distinct separators. No whitespace/fullwidth digit/dash-as-zero/arithmetic/trailing-minus guessing. Decimal digits/fractional trailing zeros remain exact, no floating point.
+- Blank is not zero. IDs remain text unless explicitly changed. Identical transaction values never delete rows.
+- Safety bounds: 5,000 data rows, 50 columns, 10,000 characters/cell, 2,000,000 selected text characters, 50 presets. Exceeding bounds stops output without truncation; not throughput guarantees.
+- CSV: comma, every field quoted, embedded quotes doubled, CRLF records including final ending, internal breaks retained, BOM, literal-safe only. Formula-looking text/headers get a leading tab; converted decimal negatives do not. Bad controls block output. No raw-values/BOM-less/multiple-CSV ZIP modes.
+
+## Import into Microsoft Excel
+
+1. Use **Data → From Text/CSV**, not double-click. Labels differ by Excel version.
+2. Choose UTF-8/comma; inspect Japanese and column count.
+3. Inspect/remove automatic type conversion **before loading**. Set leading-zero/over-15-digit IDs, phones, date-looking/scientific-notation-looking IDs and formula-looking values to **Text**. Later formatting cannot recover lost digits.
+4. Set date order/locale and amount precision. Long amounts can be imported as Text to preserve digits, which differs from a calculable Excel number.
+5. Compare IDs/dates/amounts/blanks/count/protection tabs with the preview. Saving an .xlsx is separate; this extension does not create/modify Excel workbooks.
+
+BOM/quotes do not disable type inference. Tabs change file values and may remain visible. Editing/re-saving CSV may remove protection. Acceptance is separate for each OS/Excel version. [Microsoft: leading zeros/long numbers](https://support.microsoft.com/en-us/excel/keeping-leading-zeros-and-large-numbers), [OWASP: CSV injection](https://community.owasp.org/attacks/CSV_Injection).
+
+## Development and evidence
+
+~~~sh
+npm test
+npm run typecheck
+npm run build
+PLAYWRIGHT_BROWSERS_PATH=node_modules/.cache/ms-playwright npx playwright install chromium
+PLAYWRIGHT_BROWSERS_PATH=node_modules/.cache/ms-playwright npm run test:browser
+~~~
+
+Hand-authored fixtures/expectations and independent CSV reader: tests/fixtures and tests/oracle.ts. Health checks reject changed dates, money, counts, source and blank/zero. Before implementation, valid empty adapters failed semantic comparisons while oracle checks passed. Save/preset evaluators also preceded implementation. CI retains these checks without relying on ignored internal specifications.
+
+Local results: 234 automated tests, TypeScript check, build, and seven isolated browser scenarios pass. Chrome for Testing 153.0.8010.12 on macOS 26.4.1 (Apple M4 Max, 64 GiB) saved the exact 476-byte oracle CSV. Twenty fixed 1,000-row × 30-column trials were below 3 seconds (95th percentile 282.8 ms, maximum 297.9 ms); not a guarantee for other machines.
+
+Browser automation uses a temporary isolated copy with **test-only loopback host permission** for injection/worker/UI. Production has no host permission. This does not prove activeTab or native Save As; normal Chrome is separate evidence. CI passed the same automated checks on Linux/Windows/macOS, not Excel or business acceptance. The PR records actual CI results and release-readiness score.
+
+For normal macOS Chrome, the production build was loaded and toolbar-to-workspace opening was observed. On 2026-10-01, the operator reported successful save and cancellation after following the synthetic fixture's capture/preview/save/reload/cancel steps. This is **operator-reported evidence**, not independently observed CSV bytes or an Excel import. The running desktop Chrome version was not recorded. Normal Windows Chrome, Excel import on both OSes, and business acceptance remain unverified release gates; no universal Chrome/site compatibility is claimed. Reload the unpacked extension after rebuilding and reopen its workspace before using changed code.
+
+### Authorized public-table checks (2026-10-01)
+
+Four public sites were checked against expectations fixed before evaluation, with independent source/CSV readers. These are saved HTTP HTML and separately labelled read-only browser DOM snapshots replayed through the product extraction/preview/CSV functions, **not extension-UI or native-save tests**. Page scripts and external CSS do not run in the replay; continuing page behavior, Excel and business acceptance are not proved.
+
+| Public source | Observed input and result |
+| --- | --- |
+| [W3Schools HTML tables](https://www.w3schools.com/html/html_tables.asp) | 6 rows, 3 source columns. Country then Company, excluding Contact: all values and the hand-authored 224-byte CSV match. The visible table's browser DOM values also match the source expectation. |
+| [DataTables example](https://datatables.net/examples/core/basic_init/zero_configuration.html) | HTTP HTML has 57 data rows plus a footer; the live browser DOM has only 10 current data rows plus the footer. Name/start date/salary capture matches each input. Explicit date/amount settings report 2 footer errors and block CSV. A separately chosen text setting preserves every row: 2,406 bytes for HTTP HTML, 494 bytes for current DOM, both independently read back. No all-page capture claim. |
+| [ECB reference rates](https://www.ecb.europa.eu/stats/policy_and_exchange_rates/euro_reference_exchange_rates/html/index.en.html) | Merged header cells: explicitly refused, no CSV. This is an unsupported-input check, not an export success. |
+| [Bank of Japan rate history](https://www.boj.or.jp/statistics/boj/other/discount/discount.htm) | Merged cells: explicitly refused, no CSV. Japanese-era date conversion is not claimed. |
+
+The DataTables live DOM exposed an erroneous rejection of ordinary span=1 cells. A regression failed before the fix; the same five public inputs/expectations match after the fix. Genuine merged cells still stop extraction. Private banking/source tabs were not tested.
+
+## Privacy and scope
+
+See [PRIVACY.md](PRIVACY.md). Only activeTab/scripting/storage/downloads. Transactions/CSV in workspace memory; presets/minimal save metadata in storage.local; no storage.sync or external product network path. Service-worker permanence is unnecessary.
+
+Excel templates, wider collection, AI, ledgers, team/cloud/API integrations and automatic login remain future work, not shipped/pre-wired. Internal specs/instructions stay local-only and are not included in clones/distribution.

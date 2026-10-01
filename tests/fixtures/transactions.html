@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="ja">
+<head><meta charset="utf-8"><title>合成取引一覧（架空データ）</title></head>
+<body>
+  <h1>合成取引一覧（すべて架空データ）</h1>
+  <form><label>ログイン名<input name="login" value="do-not-capture-login"></label><label>パスワード<input type="password" value="do-not-capture-password"></label></form>
+  <table id="unselected"><thead><tr><th>別の表</th><th>非対象値</th></tr></thead><tbody><tr><td>別取引</td><td>do-not-capture-other-table</td></tr></tbody></table>
+  <table id="transactions">
+    <thead><tr><th>ID</th><th>取引日</th><th>摘要</th><th>金額</th><th>メモ</th><th>除外する列</th></tr></thead>
+    <tbody>
+      <tr><td>00001</td><td>2026/10/01</td><td>日本語,"引用"<br>二行目<script>do-not-capture-script</script><style>.secret{color:red}</style><template>do-not-capture-template</template></td><td>¥1,234.50</td><td></td><td>do-not-capture-excluded</td></tr>
+      <tr><td>12345678901234567890</td><td>2024/02/29</td><td>=SUM(1,2)</td><td>-¥330</td><td>0</td><td>do-not-capture-excluded</td></tr>
+      <tr><td>00003</td><td>2026/10/02</td><td>+81-90-0000</td><td>¥0</td><td></td><td>do-not-capture-excluded</td></tr>
+      <tr><td>00004</td><td>2026/10/02</td><td>@name</td><td>¥12.00</td><td></td><td>do-not-capture-excluded</td></tr>
+      <tr><td>00005</td><td>2026/10/03</td><td> 	＝1+2</td><td>¥00001.2300</td><td></td><td>do-not-capture-excluded</td></tr>
+      <tr><td>00777</td><td>2026/10/04</td><td>同値の別取引</td><td>¥20.00</td><td></td><td>do-not-capture-excluded</td></tr>
+      <tr><td>00777</td><td>2026/10/04</td><td>同値の別取引</td><td>¥20.00</td><td></td><td>do-not-capture-excluded</td></tr>
+    </tbody>
+    <tfoot><tr><td>00008</td><td>2026/10/05</td><td>-1+2</td><td>-¥0.50</td><td>備考</td><td>do-not-capture-excluded</td></tr></tfoot>
+  </table>
+  <p>次ページは取得対象ではありません。</p>
+</body>
+</html>

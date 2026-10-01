@@ -1,0 +1,24 @@
+{
+  "name": "transaction-to-excel",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "node scripts/build.mjs",
+    "test": "node --import tsx --test tests/*.test.ts",
+    "test:browser": "playwright test",
+    "check": "npm run typecheck && npm test && npm run build",
+    "fixture": "node scripts/fixture-server.mjs",
+    "package": "node scripts/package.mjs"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "@types/chrome": "0.3.4",
+    "@types/jsdom": "30.0.0",
+    "esbuild": "0.28.2",
+    "jsdom": "26.1.0",
+    "tsx": "4.23.15",
+    "typescript": "7.0.2"
+  }
+}

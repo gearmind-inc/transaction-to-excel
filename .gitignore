@@ -22,3 +22,5 @@ output/
 # ビルド成果物・依存
 node_modules/
 dist/
+test-results/
+playwright-report/

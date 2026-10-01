@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "取引表 → CSV (無料ローカル版)",
+  "version": "0.1.0",
+  "description": "自分で開いたページの一つのHTML表を確認し、必要な列をローカルCSVへ保存します。",
+  "minimum_chrome_version": "106",
+  "permissions": ["activeTab", "scripting", "storage", "downloads"],
+  "action": { "default_title": "このページの表をCSVへ" },
+  "background": { "service_worker": "background.js", "type": "module" },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'none'; connect-src 'none'; img-src 'self'; style-src 'self'; worker-src 'self'; base-uri 'none'; frame-ancestors 'none'"
+  }
+}
