@@ -4,7 +4,7 @@ import { countMatrixChars } from './text-budget';
 export const EDIT_HISTORY_LIMIT = 50;
 export type EditorColumn = Readonly<{ id: number; valueIndex: number; name: string; included: boolean }>;
 export type EditorRow = Readonly<{ id: number; sourceRow: number | null; label: string; values: readonly string[]; included: boolean }>;
-export type EditorTable = Readonly<{ columns: readonly EditorColumn[]; rows: readonly EditorRow[]; sourceCount: number }>;
+export type EditorTable = Readonly<{ columns: readonly EditorColumn[]; rows: readonly EditorRow[]; sourceCount: number; headerColumnId: number | null; transposeName: string }>;
 export type EditorState = Readonly<{ table: EditorTable; history: readonly EditorTable[]; nextColumnId: number; nextRowId: number; discardedHistory: number }>;
 export type EditorAction =
   | { type: 'rename-column'; id: number; name: string }
@@ -15,8 +15,8 @@ export type EditorAction =
 export type EditorView = { headers: string[]; rows: string[][]; columnIds: number[]; rowIds: number[]; rowLabels: string[]; sourceCount: number };
 
 /** Transactions remain in this screen's memory. History shares immutable cells. */
-function table(columns: readonly EditorColumn[], rows: readonly EditorRow[], sourceCount: number): EditorTable {
-  return Object.freeze({ columns: Object.freeze(columns), rows: Object.freeze(rows), sourceCount });
+function table(columns: readonly EditorColumn[], rows: readonly EditorRow[], sourceCount: number, axis: Pick<EditorTable, 'headerColumnId' | 'transposeName'>): EditorTable {
+  return Object.freeze({ columns: Object.freeze(columns), rows: Object.freeze(rows), sourceCount, headerColumnId: axis.headerColumnId, transposeName: axis.transposeName });
 }
 function initialNames(headers: string[], sourceIndexes: number[]): string[] {
   const used = new Set<string>();
@@ -56,7 +56,7 @@ export function createEditor(capture: Capture): EditorState {
   const names = initialNames(capture.sourceIndexes.map(index => capture.headers[index]), capture.sourceIndexes);
   const columns = capture.sourceIndexes.map((id, valueIndex) => Object.freeze({ id, valueIndex, name: names[valueIndex], included: true }));
   const rows = capture.rows.map((values, id) => Object.freeze({ id, sourceRow: id + 1, label: `元の行${id + 1}`, values: Object.freeze([...values]), included: true }));
-  const initial = table(columns, rows, capture.rows.length);
+  const initial = table(columns, rows, capture.rows.length, { headerColumnId: null, transposeName: '元の列' });
   validateVisibleBudget(initial);
   return Object.freeze({ table: initial, history: Object.freeze([]), nextColumnId: Math.max(...capture.sourceIndexes) + 1, nextRowId: capture.rows.length, discardedHistory: 0 });
 }
@@ -74,17 +74,27 @@ export function editTable(state: EditorState, action: EditorAction): EditorState
   let nextColumnId = state.nextColumnId, nextRowId = state.nextRowId;
   if (action.type === 'transpose') {
     const problem = transposeProblem(state); if (problem) throw new Error(problem);
-    const visible = editorView(state);
-    const columns = ['元の列', ...visible.rowLabels].map((name, valueIndex) => Object.freeze({ id: nextColumnId++, valueIndex, name, included: true }));
-    const rows = visible.headers.map((name, index) => Object.freeze({ id: nextRowId++, sourceRow: null, label: `元の列${index + 1}`, values: Object.freeze([name, ...visible.rows.map(row => row[index])]), included: true }));
-    next = table(columns, rows, state.table.sourceCount);
+    if (state.table.headerColumnId !== null) {
+      // Only this identified column contains real headers. Generated headings
+      // return to row metadata, even if the header column was moved or renamed.
+      const headers = state.table.columns.find(column => column.id === state.table.headerColumnId)!;
+      const visibleRows = state.table.rows.filter(row => row.included);
+      const columns = visibleRows.map((row, valueIndex) => Object.freeze({ id: nextColumnId++, valueIndex, name: row.values[headers.valueIndex], included: true }));
+      const rows = state.table.columns.filter(column => column.included && column.id !== headers.id).map(column => Object.freeze({ id: nextRowId++, sourceRow: null, label: column.name, values: Object.freeze(visibleRows.map(row => row.values[column.valueIndex])), included: true }));
+      next = table(columns, rows, state.table.sourceCount, { headerColumnId: null, transposeName: headers.name });
+    } else {
+      const visible = editorView(state);
+      const columns = [state.table.transposeName, ...visible.rowLabels].map((name, valueIndex) => Object.freeze({ id: nextColumnId++, valueIndex, name, included: true }));
+      const rows = visible.headers.map((name, index) => Object.freeze({ id: nextRowId++, sourceRow: null, label: `元の列${index + 1}`, values: Object.freeze([name, ...visible.rows.map(row => row[index])]), included: true }));
+      next = table(columns, rows, state.table.sourceCount, { headerColumnId: columns[0].id, transposeName: state.table.transposeName });
+    }
   } else if (action.type === 'exclude-row' || action.type === 'restore-row') {
     const index = state.table.rows.findIndex(row => row.id === action.id);
     if (index < 0) throw new Error('編集する行がありません。現在の表から選んでください。');
     const included = action.type === 'restore-row';
     if (state.table.rows[index].included === included) return state;
     const rows = [...state.table.rows]; rows[index] = Object.freeze({ ...rows[index], included });
-    next = table(state.table.columns, rows, state.table.sourceCount);
+    next = table(state.table.columns, rows, state.table.sourceCount, state.table);
   } else {
     const index = state.table.columns.findIndex(column => column.id === action.id);
     if (index < 0) throw new Error('編集する列がありません。現在の表から選んでください。');
@@ -105,7 +115,7 @@ export function editTable(state: EditorState, action: EditorAction): EditorState
       if (column.included === included) return state;
       columns[index] = Object.freeze({ ...column, included });
     }
-    next = table(columns, state.table.rows, state.table.sourceCount);
+    next = table(columns, state.table.rows, state.table.sourceCount, state.table);
   }
   validateVisibleBudget(next);
   const history = [...state.history, state.table], discarded = Math.max(0, history.length - EDIT_HISTORY_LIMIT);
@@ -115,10 +125,18 @@ export function canUndo(state: EditorState): boolean { return state.history.leng
 export function transposeProblem(state: EditorState): string | undefined {
   const columns = state.table.columns.filter(column => column.included), rows = state.table.rows.filter(row => row.included);
   if (!columns.length) return '行列を入れ替えるには、列を1つ以上戻してください。';
+  if (state.table.headerColumnId !== null) {
+    const headers = state.table.columns.find(column => column.id === state.table.headerColumnId)!;
+    if (!headers.included) return `行列を入れ替えるには、元の列名を含む「${headers.name}」列を戻してください。`;
+    if (!rows.length) return '行列を入れ替えるには、行を1つ以上戻してください。';
+    // Returning promotes existing cells to headers and drops generated headings.
+    // It fits the original column bound and cannot increase the text budget.
+    return undefined;
+  }
   // Reject the common large-table case before allocating a visible cell matrix.
   if (rows.length + 1 > LIMITS.columns) return `行列を入れ替えると${LIMITS.columns}列の上限を超えます。元の見出しを残す列も必要なため、出力する行を${LIMITS.columns - 1}件以下にしてください。`;
   // Current headers become data; generated row labels become new headers.
-  const chars = visibleChars(state.table) + countMatrixChars(['元の列', ...rows.map(row => row.label)], []);
+  const chars = visibleChars(state.table) + countMatrixChars([state.table.transposeName, ...rows.map(row => row.label)], []);
   if (chars > LIMITS.textChars) return '行列を入れ替えると文字数の処理上限を超えます。出力する行または列を減らしてください。';
   return undefined;
 }

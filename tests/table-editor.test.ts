@@ -37,6 +37,85 @@ test('transpose includes edited headers as ordinary values and never exports UI 
   assert.deepEqual(state.table.rows.map(row => row.sourceRow), [null, null]);
 });
 
+test('repeated transpose alternates fixed matrices without growing headers, rows or CSV cells', () => {
+  const input = capture(['ID', 'メモ', '値'], [['0001', '=1+1', ''], ['0002', '日本語,"引用"\n次の行', '0']]);
+  const original = structuredClone(input);
+  const normal = [['ID', 'メモ', '値'], ['0001', '=1+1', ''], ['0002', '日本語,"引用"\n次の行', '0']];
+  const flipped = [['元の列', '元の行1', '元の行2'], ['ID', '0001', '0002'], ['メモ', '=1+1', '日本語,"引用"\n次の行'], ['値', '', '0']];
+  let state = createEditor(input);
+  for (let index = 0; index < 20; index++) {
+    state = editTable(state, { type: 'transpose' });
+    assert.deepEqual(cells(state), flipped);
+    const beforeReturn = state.table;
+    state = editTable(state, { type: 'transpose' });
+    assert.deepEqual(cells(state), normal);
+    assert.deepEqual(editorView(state).rowLabels, ['元の行1', '元の行2']);
+    assert.equal(editorView(state).sourceCount, 2);
+    assert.equal(editTable(state, { type: 'undo' }).table, beforeReturn);
+  }
+  const view = editorView(state);
+  const config = view.headers.map((outputName, sourceIndex) => ({ sourceIndex, outputName, kind: 'text' as const, required: false, dateFormat: 'YYYY-MM-DD' as const, dateOutput: 'YYYY-MM-DD' as const, amount: { symbol: '' as const, grouping: '' as const, decimal: '.' as const, negative: 'minus' as const } }));
+  assert.deepEqual(parseCsv(generateCsv(buildPreview({ ...input, headers: view.headers, sourceIndexes: [0, 1, 2], rows: view.rows }, config))), [['ID', 'メモ', '値'], ['0001', '\t=1+1', ''], ['0002', '日本語,"引用"\n次の行', '0']]);
+  assert.deepEqual(input, original);
+});
+
+test('return transpose retains edits and tracks the header column by identity rather than name or position', () => {
+  let state = editTable(createEditor(capture()), { type: 'transpose' });
+  const [names, first, second] = editorView(state).columnIds;
+  state = editTable(state, { type: 'rename-column', id: names, name: '列名' });
+  state = editTable(state, { type: 'rename-column', id: first, name: '取引A' });
+  state = editTable(state, { type: 'move-column', id: second, toVisibleIndex: 0 });
+  const transposed = cells(state);
+  const prior = state;
+  state = editTable(state, { type: 'transpose' });
+  assert.deepEqual(cells(state), [['名前', '金額'], ['B社', '0'], ['A社', '001']]);
+  assert.deepEqual(editorView(state).rowLabels, ['元の行2', '取引A']);
+  state = editTable(state, { type: 'transpose' });
+  assert.deepEqual(cells(state), [['列名', '元の行2', '取引A'], ['名前', 'B社', 'A社'], ['金額', '0', '001']]);
+  assert.deepEqual(cells(editTable(editTable(state, { type: 'undo' }), { type: 'undo' })), transposed);
+  assert.equal(prior.history.length, 4);
+});
+
+test('return transpose reflects visible exclusions while undo retains the complete transposed state', () => {
+  let state = editTable(createEditor(capture(['A', 'B', 'C'], [['a1', 'b1', 'c1'], ['a2', 'b2', 'c2']])), { type: 'transpose' });
+  state = editTable(state, { type: 'exclude-row', id: editorView(state).rowIds[1] });
+  state = editTable(state, { type: 'exclude-column', id: editorView(state).columnIds[1] });
+  const before = state;
+  state = editTable(state, { type: 'transpose' });
+  assert.deepEqual(cells(state), [['A', 'C'], ['a2', 'c2']]);
+  assert.equal(editTable(state, { type: 'undo' }).table, before.table);
+  state = editTable(state, { type: 'transpose' });
+  assert.deepEqual(cells(state), [['元の列', '元の行2'], ['A', 'a2'], ['C', 'c2']]);
+});
+
+test('return transpose refuses hidden header values or no columns without mutating state and history', () => {
+  const flipped = editTable(createEditor(capture()), { type: 'transpose' });
+  const hiddenNames = editTable(flipped, { type: 'exclude-column', id: editorView(flipped).columnIds[0] });
+  assert.match(transposeProblem(hiddenNames) ?? '', /戻/);
+  assert.throws(() => editTable(hiddenNames, { type: 'transpose' }), /戻/);
+  assert.equal(hiddenNames.history.length, 2);
+  const restored = editTable(hiddenNames, { type: 'restore-column', id: flipped.table.columns[0].id });
+  assert.deepEqual(cells(editTable(restored, { type: 'transpose' })), [['名前', '金額'], ['A社', '001'], ['B社', '0']]);
+  let noRows = flipped;
+  for (const id of editorView(flipped).rowIds) noRows = editTable(noRows, { type: 'exclude-row', id });
+  assert.match(transposeProblem(noRows) ?? '', /行.*戻/);
+  assert.throws(() => editTable(noRows, { type: 'transpose' }), /行.*戻/);
+  assert.equal(noRows.history.length, 3);
+});
+
+test('zero data rows and the full fifty-column boundary can transpose back repeatedly', () => {
+  for (const initial of [capture(['空表'], []), capture(Array.from({ length: 50 }, (_, index) => `列${index + 1}`), [Array.from({ length: 50 }, (_, index) => `値${index + 1}`)])]) {
+    let state = createEditor(initial);
+    const normal = cells(state);
+    for (let index = 0; index < 3; index++) {
+      state = editTable(state, { type: 'transpose' });
+      assert.equal(transposeProblem(state), undefined);
+      state = editTable(state, { type: 'transpose' });
+      assert.deepEqual(cells(state), normal);
+    }
+  }
+});
+
 test('transpose acts on visible cells; undo restores excluded information and earlier history', () => {
   let state = createEditor(capture());
   state = editTable(state, { type: 'exclude-row', id: 0 });

@@ -113,6 +113,103 @@ async function savedCsv(harness: Harness, expected: string[][]): Promise<number>
   return id;
 }
 
+test('repeated transpose restores every original cell without growing rows or columns and undo restores the prior orientation', async ({ harness }) => {
+  const page = harness.workspace;
+  await capture(harness);
+  const flipped = [
+    ['元の列', '元の行1', '元の行2', '元の行3'],
+    ['ID', '00001', '12345678901234567890', '00003'],
+    ['内容', '日本語,"引用"\n二行目', '=SUM(1,2)', '@name'],
+    ['値', '0', '', '先頭ゼロ 001'],
+    ['メモ', '', '零', '戻す行'],
+  ];
+  for (let cycle = 0; cycle < 10; cycle++) {
+    await page.locator('#transpose').click(); await matrix(page, flipped);
+    await page.locator('#transpose').click(); await matrix(page, initial);
+  }
+  await page.locator('#undo').click(); await matrix(page, flipped);
+  await page.locator('#undo').click(); await matrix(page, initial);
+});
+
+test('transposed rename, column movement and both exclusions survive reverse transpose and preserve exact CSV values', async ({ harness }) => {
+  const page = harness.workspace;
+  await capture(harness);
+  await page.locator('#transpose').click();
+  const heading = (name: string) => page.getByRole('button', { name: `${name}：この列を調整`, exact: true });
+  await heading('元の行1').click(); await page.locator('#column-name').fill('最初の取引');
+  await page.locator('#column-close').click();
+  await heading('元の行3').click();
+  await page.locator('#column-left').click(); await page.locator('#column-left').click();
+  await page.locator('#column-close').click();
+  // Move and rename the original-heading column to prove its role survives
+  // edits instead of depending on its displayed name or first position.
+  await heading('元の列').click(); await page.locator('#column-name').fill('項目');
+  await page.locator('#column-right').click(); await page.locator('#column-right').click(); await page.locator('#column-right').click();
+  await page.locator('#column-close').click();
+  await matrix(page, [
+    ['元の行3', '最初の取引', '元の行2', '項目'],
+    ['00003', '00001', '12345678901234567890', 'ID'],
+    ['@name', '日本語,"引用"\n二行目', '=SUM(1,2)', '内容'],
+    ['先頭ゼロ 001', '0', '', '値'],
+    ['戻す行', '', '零', 'メモ'],
+  ]);
+  await heading('元の行2').click(); await page.locator('#column-hide').click();
+  await page.getByRole('button', { name: '元の列3を除外', exact: true }).click();
+  const editedFlipped = [
+    ['元の行3', '最初の取引', '項目'],
+    ['00003', '00001', 'ID'],
+    ['@name', '日本語,"引用"\n二行目', '内容'],
+    ['戻す行', '', 'メモ'],
+  ];
+  await matrix(page, editedFlipped);
+  await savedCsv(harness, [
+    ['元の行3', '最初の取引', '項目'],
+    ['00003', '00001', 'ID'],
+    ['\t@name', '日本語,"引用"\n二行目', '内容'],
+    ['戻す行', '', 'メモ'],
+  ]);
+  await page.locator('#transpose').click();
+  const returned = [
+    ['ID', '内容', 'メモ'],
+    ['00003', '@name', '戻す行'],
+    ['00001', '日本語,"引用"\n二行目', ''],
+  ];
+  await matrix(page, returned);
+  await expect(page.getByRole('button', { name: '最初の取引を除外', exact: true })).toBeVisible();
+  await expect(page.locator('#hidden-columns button')).toHaveCount(0);
+  await expect(page.locator('#hidden-rows button')).toHaveCount(0);
+  await savedCsv(harness, [
+    ['ID', '内容', 'メモ'],
+    ['00003', '\t@name', '戻す行'],
+    ['00001', '日本語,"引用"\n二行目', ''],
+  ]);
+  // Transpose projects the included axes. Undo brings back the full prior
+  // orientation and its excluded values so they can be restored there.
+  await page.locator('#undo').click(); await matrix(page, editedFlipped);
+  await page.getByRole('button', { name: '元の行2：列を復元', exact: true }).click();
+  await page.getByRole('button', { name: '元の列3：行を復元', exact: true }).click();
+  await matrix(page, [
+    ['元の行3', '最初の取引', '元の行2', '項目'],
+    ['00003', '00001', '12345678901234567890', 'ID'],
+    ['@name', '日本語,"引用"\n二行目', '=SUM(1,2)', '内容'],
+    ['先頭ゼロ 001', '0', '', '値'],
+    ['戻す行', '', '零', 'メモ'],
+  ]);
+  await page.locator('#transpose').click();
+  await matrix(page, [
+    ['ID', '内容', '値', 'メモ'],
+    ['00003', '@name', '先頭ゼロ 001', '戻す行'],
+    ['00001', '日本語,"引用"\n二行目', '0', ''],
+    ['12345678901234567890', '=SUM(1,2)', '', '零'],
+  ]);
+  await savedCsv(harness, [
+    ['ID', '内容', '値', 'メモ'],
+    ['00003', '\t@name', '先頭ゼロ 001', '戻す行'],
+    ['00001', '日本語,"引用"\n二行目', '0', ''],
+    ['12345678901234567890', '\t=SUM(1,2)', '', '零'],
+  ]);
+});
+
 test('editor sequence: drag, exclude/restore both axes, transpose, undo, save, edit and resave retain every fixed cell', async ({ harness }, testInfo) => {
   const page = harness.workspace;
   await capture(harness);
