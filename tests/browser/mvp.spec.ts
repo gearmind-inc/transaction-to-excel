@@ -370,8 +370,9 @@ const browserContent = `<!doctype html><html lang="ja"><head><meta charset="utf-
     <table id="unsupported"><tr><th colspan="2">結合見出し</th></tr><tr><td><span id="partial">AA</span></td><td>BB</td></tr></table>
   </body></html>`;
 const contentHeader = ['タイトル', '内容'];
-const articleRows = [['概要', '最初の説明。参照できます。'], ['手順', '一行目\n二行目']];
-const cardRows = [['カード', 'カードの内容']];
+const articleHeader = ['H1', 'H2', '内容'];
+const articleRows = [['', '概要', '最初の説明。参照できます。'], ['', '手順', '一行目\n二行目']];
+const cardRows = [['', 'カード', 'カードの内容']];
 const bodyRows = [
   ['確認用ページ / 概要', '最初の説明。参照できます。'],
   ['確認用ページ / 手順', '一行目\n二行目'],
@@ -438,10 +439,10 @@ test('page content: whole body preview and real saved CSV bytes preserve visible
   await testInfo.attach('content-browser-evidence', { body: JSON.stringify({ browser: harness.context.browser()?.version(), source: 'synthetic displayed HTML', actualSavedBytes: actual.length, activationDifference: 'test-only loopback host grant and direct workspace URL; native toolbar/side-panel activation not covered', saveDialogDifference: 'CDP isolated directory; native Save As UI not covered' }, null, 2), contentType: 'application/json' });
 });
 
-test('range picker: real hover/click selects an article and preserves only its title-content rows', async ({ harness }, testInfo) => {
+test('range picker: real hover/click selects an article and preserves only its heading hierarchy and content', async ({ harness }, testInfo) => {
   await contentSource(harness);
   await pickSource(harness, '#article');
-  await contentPreview(harness.workspace, articleRows);
+  await contentPreview(harness.workspace, articleRows, articleHeader);
   expect(await harness.workspace.locator('#preview').innerText()).not.toMatch(/カードの内容|入力ラベル|AA|do-not-capture/);
   expect(await storage(harness.workspace)).toEqual({});
   const sourceImage = testInfo.outputPath('article-source.png');
@@ -485,7 +486,7 @@ test('range picker: Escape cleans the page and a restarted selection captures on
   await expect(workspace.locator('#capture')).toBeDisabled();
   await expect(workspace.locator('#pick')).toBeEnabled();
   await pickSource(harness, '#card');
-  await contentPreview(workspace, cardRows);
+  await contentPreview(workspace, cardRows, articleHeader);
 });
 
 test('narrow panel: 320px layout keeps page controls and confirmation within the viewport', async ({ harness }) => {
@@ -503,7 +504,7 @@ test('narrow panel: 320px layout keeps page controls and confirmation within the
 
 test('new document: capture after source navigation cannot apply the old selected range or leave a saveable stale preview', async ({ harness }) => {
   await contentSource(harness); await pickSource(harness, '#article');
-  await contentPreview(harness.workspace, articleRows);
+  await contentPreview(harness.workspace, articleRows, articleHeader);
   await harness.workspace.locator('#confirm').check();
   await harness.source.goto(fixtureUrl);
   await harness.workspace.bringToFront();
@@ -627,5 +628,163 @@ test('initial table adjustments: headers rename, move, hide and restore while pr
   await workspace.locator('#cell-detail').getByRole('button', { name: '閉じる', exact: true }).click();
   await expect(workspace.locator('#cell-detail')).toBeHidden();
   await expect(cellDetail).toBeFocused();
+  expect(await storage(workspace)).toEqual({});
+});
+
+// Literal section values and CSV bytes are hand-authored independently of the
+// extraction and CSV writers. Child body text belongs only to its own row.
+const hierarchyHeader = ['H1', 'H2', 'H3', '内容'];
+const hierarchyRows = [
+  ['合成ガイド', '', '', 'これは合成の文書です。\n表示内容を取り込みます。'],
+  ['合成ガイド', '準備', '', 'ページを開きます。\n範囲を選びます。\n表を確認します。\n保存先を決めます。'],
+  ['合成ガイド', '準備', '用語', '範囲：選んだHTMLの領域。\n列：一つの項目。'],
+  ['合成ガイド', '操作', '', '見出しを押します。\n列名を変更します。'],
+  ['合成ガイド', '操作', '例', 'run --csv\n  --output sample.csv'],
+  ['', '', '', 'この文書は合成です。'],
+];
+const hierarchyCsv = '\uFEFF"H1","H2","小見出し","内容"\r\n'
+  + '"合成ガイド","","","これは合成の文書です。\n表示内容を取り込みます。"\r\n'
+  + '"合成ガイド","準備","","ページを開きます。\n範囲を選びます。\n表を確認します。\n保存先を決めます。"\r\n'
+  + '"合成ガイド","準備","用語","範囲：選んだHTMLの領域。\n列：一つの項目。"\r\n'
+  + '"合成ガイド","操作","","見出しを押します。\n列名を変更します。"\r\n'
+  + '"合成ガイド","操作","例","run --csv\n  --output sample.csv"\r\n'
+  + '"","","","この文書は合成です。"\r\n';
+
+test('document hierarchy: initial H1-H3 columns own section bodies, remain editable and save exact CSV bytes', async ({ harness }, testInfo) => {
+  const { source, workspace, downloadDirectory } = harness;
+  await source.goto(`${new URL(fixtureUrl).origin}/document-hierarchy`);
+  await workspace.bringToFront();
+  await workspace.locator('#scan').click();
+  await expect(workspace.locator('#page-content')).toBeEnabled();
+  await workspace.locator('#page-content').click();
+  // No second acquisition click: the first visible table must be structured.
+  await expect(workspace.locator('#preview thead th')).toHaveCount(5);
+  await contentPreview(workspace, hierarchyRows, hierarchyHeader);
+  expect(await workspace.locator('#preview').innerText()).not.toMatch(/do-not-capture/);
+  await workspace.locator('#confirm').check();
+  await editColumn(workspace, 3);
+  await workspace.locator('#column-name').fill('小見出し');
+  await expect(workspace.locator('#confirm')).not.toBeChecked();
+  const outputHeader = ['H1', 'H2', '小見出し', '内容'];
+  await contentPreview(workspace, hierarchyRows, outputHeader);
+  const image = testInfo.outputPath('document-hierarchy-preview.png');
+  await workspace.screenshot({ path: image, fullPage: true });
+  await testInfo.attach('document-hierarchy-preview', { path: image, contentType: 'image/png' });
+  await workspace.locator('#confirm').check();
+  const session = await harness.context.newCDPSession(workspace);
+  await session.send('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: downloadDirectory, eventsEnabled: true });
+  await workspace.locator('#save').click();
+  await expect(workspace.locator('#save-status')).toContainText('保存完了を照合しました');
+  const record = await storage(workspace);
+  const downloadId = (record.saveAttemptV1 as { downloadId: number }).downloadId;
+  const files = await workspace.evaluate(id => chrome.downloads.search({ id }), downloadId);
+  expect(files).toHaveLength(1); expect(files[0].state).toBe('complete');
+  const actual = await readFile(files[0].filename);
+  expect(actual).toEqual(Buffer.from(hierarchyCsv, 'utf8'));
+  expect(parseCsv(actual)).toEqual([outputHeader, ...hierarchyRows]);
+  expect(JSON.stringify(record)).not.toMatch(/合成ガイド|用語|do-not-capture/);
+  await assertOtherStorageEmpty(workspace);
+});
+
+const visibleShadowDocument = `<!doctype html><html lang="ja"><head><meta charset="utf-8"><title>実表示の見出し確認</title>
+<style>body{font:16px sans-serif;margin:24px}.inactive{display:none}footer{margin-top:24px;border-top:1px solid #999}</style></head><body>
+<main><h1 id="opaque-title">操作ガイド<x-actions><span id="hidden-helper">do-not-capture-helper</span><button id="hidden-tooltip">do-not-capture-tooltip</button></x-actions></h1>
+<x-closed><h6 id="closed-heading">do-not-capture-closed-H6</h6><span id="closed-helper">do-not-capture-closed-helper</span>
+<table id="closed-table"><thead><tr><th>do-not-capture-closed-columnA</th><th>do-not-capture-closed-columnB</th></tr></thead><tbody><tr><td>do-not-capture-closed-cellA</td><td>do-not-capture-closed-cellB</td></tr></tbody></table>
+<div role="row" id="closed-row"><span role="cell">do-not-capture-closed-role-cellA</span><span role="cell">do-not-capture-closed-role-cellB</span></div></x-closed>
+<x-closed-records id="closed-record-box" style="display:block;width:100px;height:10px;background:#eee">
+<div id="closed-record-one"><span id="closed-record-cellA">do-not-capture-closed-record-cellA</span><span id="closed-record-cellB">do-not-capture-closed-record-cellB</span></div>
+<div id="closed-record-two"><span id="closed-record-cellC">do-not-capture-closed-record-cellC</span><span id="closed-record-cellD">do-not-capture-closed-record-cellD</span></div></x-closed-records>
+<p>本文は一つ。</p><h2>準備</h2><p>可視の案内。</p>
+<h1 id="slotted-title"><x-title><span slot="label" id="slotted-label">別のガイド</span><span id="unassigned-label">do-not-capture-unassigned</span></x-title></h1>
+<p id="offscreen-body" style="margin-top:1500px">別の本文。<x-closed-title><span slot="label" id="closed-slotted-label">閉じた部品の表示文字。</span><span id="closed-unassigned-label">do-not-capture-closed-unassigned</span></x-closed-title></p></main>
+<footer><h2>関連情報</h2><p>フッターの本文。</p><h6 class="inactive">do-not-capture-H6</h6></footer>
+<script>
+customElements.define('x-actions', class extends HTMLElement { constructor() { super(); this.attachShadow({mode:'open'}); } });
+customElements.define('x-title', class extends HTMLElement { constructor() { super(); this.attachShadow({mode:'open'}).innerHTML = '<slot name="label"></slot>'; } });
+customElements.define('x-closed', class extends HTMLElement { constructor() { super(); this.attachShadow({mode:'closed'}); } });
+customElements.define('x-closed-title', class extends HTMLElement { constructor() { super(); this.attachShadow({mode:'closed'}).innerHTML = '<slot name="label"></slot>'; } });
+customElements.define('x-closed-records', class extends HTMLElement { constructor() { super(); this.attachShadow({mode:'closed'}); } });
+</script></body></html>`;
+const visibleShadowRows = [
+  ['操作ガイド', '', '本文は一つ。'],
+  ['操作ガイド', '準備', '可視の案内。'],
+  ['別のガイド', '', '別の本文。閉じた部品の表示文字。'],
+  ['', '関連情報', 'フッターの本文。'],
+];
+
+test('document visibility: slotted heading text stays, unassigned helpers disappear and footer starts a separate hierarchy', async ({ harness }, testInfo) => {
+  const { source, workspace } = harness;
+  await source.setContent(visibleShadowDocument);
+  // Real Chromium rendering establishes which light-DOM text reaches the
+  // screen. A computed display style alone cannot identify an unassigned node.
+  await expect(source.locator('#hidden-helper')).not.toBeVisible();
+  await expect(source.locator('#hidden-tooltip')).not.toBeVisible();
+  await expect(source.locator('#unassigned-label')).not.toBeVisible();
+  await expect(source.locator('#closed-heading')).not.toBeVisible();
+  await expect(source.locator('#closed-helper')).not.toBeVisible();
+  await expect(source.locator('#closed-table')).not.toBeVisible();
+  await expect(source.locator('#closed-row')).not.toBeVisible();
+  await expect(source.locator('#closed-record-box')).toBeVisible();
+  expect(await source.locator('#closed-record-box').evaluate(host => {
+    const bounds = host.getBoundingClientRect(); return { width: bounds.width, height: bounds.height };
+  })).toEqual({ width: 100, height: 10 });
+  for (const id of ['closed-record-one', 'closed-record-two', 'closed-record-cellA', 'closed-record-cellB', 'closed-record-cellC', 'closed-record-cellD']) {
+    await expect(source.locator(`#${id}`)).not.toBeVisible();
+  }
+  await expect(source.locator('#closed-unassigned-label')).not.toBeVisible();
+  expect(await source.locator('x-closed').evaluate(host => host.shadowRoot)).toBeNull();
+  await expect(source.locator('#closed-slotted-label')).toBeVisible();
+  expect(await source.locator('#closed-slotted-label').evaluate(label => label.assignedSlot)).toBeNull();
+  expect(await source.locator('x-closed-title').evaluate(host => host.shadowRoot)).toBeNull();
+  await expect(source.locator('#slotted-label')).toBeVisible();
+  expect(await source.locator('#opaque-title').innerText()).toBe('操作ガイド');
+  expect(await source.locator('#slotted-title').innerText()).toBe('別のガイド');
+  expect(await source.locator('#offscreen-body').evaluate(element => element.getBoundingClientRect().top > innerHeight)).toBeTruthy();
+  expect(await source.locator('#offscreen-body').innerText()).toBe('別の本文。閉じた部品の表示文字。');
+  await workspace.bringToFront();
+  await workspace.locator('#scan').click();
+  await expect(workspace.locator('#page-content')).toBeEnabled();
+  await workspace.locator('#page-content').click();
+  await expect(workspace.locator('#preview tbody tr').first()).toBeVisible();
+  await expect(workspace.locator('#preview')).toHaveAttribute('aria-busy', 'false');
+  expect(await workspace.locator('#preview').innerText()).not.toMatch(/do-not-capture-closed/);
+  await contentPreview(workspace, visibleShadowRows, ['H1', 'H2', '内容']);
+  expect(await workspace.locator('#preview').innerText()).not.toMatch(/do-not-capture/);
+  const image = testInfo.outputPath('document-visible-shadow-preview.png');
+  await workspace.screenshot({ path: image, fullPage: true });
+  await testInfo.attach('document-visible-shadow-preview', { path: image, contentType: 'image/png' });
+  expect(await storage(workspace)).toEqual({});
+});
+
+const visibleMixedDocument = `<!doctype html><html lang="ja"><head><meta charset="utf-8"><title>混在範囲の実表示確認</title>
+<style>body{font:16px sans-serif;margin:24px}table{border-collapse:collapse}th,td{border:1px solid #888;padding:8px}</style></head><body>
+<main><h1 id="mixed-visible-title">構造確認<x-actions><span id="mixed-hidden-helper">do-not-capture-mixed-helper</span></x-actions></h1>
+<x-closed><h6 id="mixed-closed-heading">do-not-capture-mixed-H6</h6></x-closed>
+<p>導入</p>
+<table id="visible-mixed-grid"><thead><tr><th>品名</th><th>個数</th></tr></thead><tbody><tr><td>りんご</td><td>2</td></tr></tbody></table></main>
+<script>
+customElements.define('x-actions', class extends HTMLElement { constructor() { super(); this.attachShadow({mode:'open'}); } });
+customElements.define('x-closed', class extends HTMLElement { constructor() { super(); this.attachShadow({mode:'closed'}); } });
+</script></body></html>`;
+const visibleMixedRows = [
+  ['構造確認', '導入'],
+  ['品名', '個数'],
+  ['りんご', '2'],
+];
+
+test('mixed visibility: a genuine displayed table keeps the existing matrix while unseen heading helpers stay out', async ({ harness }) => {
+  const { source, workspace } = harness;
+  await source.setContent(visibleMixedDocument);
+  await expect(source.locator('#mixed-hidden-helper')).not.toBeVisible();
+  await expect(source.locator('#mixed-closed-heading')).not.toBeVisible();
+  expect(await source.locator('#mixed-visible-title').innerText()).toBe('構造確認');
+  await expect(source.locator('#visible-mixed-grid')).toBeVisible();
+  await workspace.bringToFront();
+  await workspace.locator('#scan').click();
+  await expect(workspace.locator('#page-content')).toBeEnabled();
+  await workspace.locator('#page-content').click();
+  await contentPreview(workspace, visibleMixedRows, ['列1', '列2']);
+  expect(await workspace.locator('#preview').innerText()).not.toMatch(/do-not-capture/);
   expect(await storage(workspace)).toEqual({});
 });

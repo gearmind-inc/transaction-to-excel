@@ -11,24 +11,16 @@ import { parseCsv } from './oracle.js';
 
 // Independent, hand-authored expectations. Never derive these from inspectPage output.
 const CONTENT_URL = 'https://fixture.example/guide';
-const CONTENT_HEADERS = ['列1', '列2'];
+const CONTENT_HEADERS = ['H1', 'H2', 'H3', '内容'];
 const CONTENT_ROWS = [
-  ['利用ガイド', '表示中の文書を保存します。'],
-  ['利用ガイド / 準備', '画面を開き、内容を確認します。'],
-  ['利用ガイド / 準備', 'ログイン名'],
-  ['利用ガイド / 準備', '保存操作:保存'],
-  ['利用ガイド / 準備', '編集メニュー'],
-  ['利用ガイド / 準備', '関連情報'],
-  ['利用ガイド / 準備', '更新情報'],
-  ['利用ガイド / 読み取り', '画面の本文だけを扱います。\n次の段落も残します。'],
-  ['利用ガイド / 読み取り / 内容の例', '最初の項目'],
-  ['利用ガイド / 読み取り / 内容の例', '二番目の項目'],
-  ['項目', '内容'],
-  ['対象', '読み込み済みの内容'],
-  ['出力', 'CSV'],
-  ['利用ガイド / 読み取り / コード', 'const example = "日本語";\n  console.log(example);'],
-  ['利用ガイド / 確認', '同じ内容'],
-  ['利用ガイド / 確認', '同じ内容'],
+  ['利用ガイド', '', '', '表示中の文書を保存します。'],
+  ['', '準備', '', '画面を開き、内容を確認します。\nログイン名\n保存操作:保存\n編集メニュー'],
+  ['', '', '', '関連情報'],
+  ['', '', '', '更新情報'],
+  ['', '読み取り', '', '画面の本文だけを扱います。\n次の段落も残します。'],
+  ['', '読み取り', '内容の例', '最初の項目\n二番目の項目\n対象：読み込み済みの内容\n出力：CSV'],
+  ['', '読み取り', 'コード', 'const example = "日本語";\n  console.log(example);'],
+  ['', '確認', '', '同じ内容\n同じ内容'],
 ];
 const fixture = readFileSync(new URL('./fixtures/content.html', import.meta.url), 'utf8');
 
@@ -74,9 +66,9 @@ test('document evaluator: table discovery remains unchanged while whole-page des
   assert.ok(!JSON.stringify(candidate).includes('do-not-capture-input'), 'discovery cannot expose input values');
   const result = capture(candidate);
   assert.equal(result.error, undefined);
-  assert.ok(result.capture!.rows.some(row => row[1].includes('サイトの案内')));
-  assert.ok(result.capture!.rows.some(row => row[1].includes('ページ移動')));
-  assert.ok(result.capture!.rows.some(row => row[1].includes('do-not-capture-other-region')), 'whole-page range includes the other visible region');
+  assert.ok(result.capture!.rows.some(row => row[3].includes('サイトの案内')));
+  assert.ok(result.capture!.rows.some(row => row[3].includes('ページ移動')));
+  assert.ok(result.capture!.rows.some(row => row[3].includes('do-not-capture-other-region')), 'whole-page range includes the other visible region');
 }));
 
 test('document evaluator: section hierarchy, visible text, duplicate paragraphs and code match the fixed oracle', () => withPage(fixture, () => {
@@ -94,12 +86,12 @@ test('document evaluator: section hierarchy, visible text, duplicate paragraphs 
 }));
 
 test('document evaluator: selecting only content preserves exact text and uses the existing preview and CSV path', () => withPage(fixture, () => {
-  const result = capture(describe('content:id:guide'), { sourceIndexes: [1] });
+  const result = capture(describe('content:id:guide'), { sourceIndexes: [3] });
   assert.equal(result.error, undefined);
-  assert.deepEqual(result.capture?.rows, CONTENT_ROWS.map(row => [row[1]]));
-  const preview = buildPreview(result.capture!, [{ ...COLUMNS[0], sourceIndex: 1, outputName: '内容', kind: 'text', required: false }]);
+  assert.deepEqual(result.capture?.rows, CONTENT_ROWS.map(row => [row[3]]));
+  const preview = buildPreview(result.capture!, [{ ...COLUMNS[0], sourceIndex: 3, outputName: '内容', kind: 'text', required: false }]);
   assert.equal(preview.errorCount, 0);
-  assert.deepEqual(parseCsv(generateCsv(preview)), [['内容'], ...CONTENT_ROWS.map(row => [row[1]])]);
+  assert.deepEqual(parseCsv(generateCsv(preview)), [['内容'], ...CONTENT_ROWS.map(row => [row[3]])]);
 }));
 
 test('document evaluator: arbitrary visible card regions can be selected independently from main', () => withPage(
@@ -107,7 +99,7 @@ test('document evaluator: arbitrary visible card regions can be selected indepen
     const candidate = describe('content:id:power');
     const result = capture(candidate);
     assert.equal(result.error, undefined);
-    assert.deepEqual(result.capture?.rows, [['パワー', '期間: 30日'], ['パワー', 'eFTP: 250 W'], ['パワー', "W': 0 kJ"]]);
+    assert.deepEqual(result.capture?.rows, [['', 'パワー', "期間: 30日\neFTP: 250 W\nW': 0 kJ"]]);
     assert.ok(!JSON.stringify(result.capture).includes('対象外'));
   },
 ));
@@ -118,7 +110,7 @@ test('document evaluator: a legacy div document without main or article remains 
     assert.equal(candidate.key, 'content:id:legacy');
     const result = capture(candidate);
     assert.equal(result.error, undefined);
-    assert.deepEqual(result.capture?.rows, [['Javaツール', '導入'], ['Javaツール / 形式', 'command [options]'], ['Javaツール / 説明', '説明本文']]);
+    assert.deepEqual(result.capture?.rows, [['Javaツール', '', '導入'], ['Javaツール', '形式', 'command [options]'], ['Javaツール', '説明', '説明本文']]);
   },
 ));
 
@@ -126,17 +118,17 @@ test('document evaluator: nested wrappers never repeat descendant paragraphs', (
   '<article id="article"><header><h1>本文</h1></header><div><div><p>一度だけ</p><p>二段落目</p></div></div><h2>次</h2><div>単独の表示テキスト<span>と続き</span></div></article>', () => {
     const result = capture(describe('content:id:article'));
     assert.equal(result.error, undefined);
-    assert.deepEqual(result.capture?.rows, [['本文', '一度だけ'], ['本文', '二段落目'], ['本文 / 次', '単独の表示テキストと続き']]);
+    assert.deepEqual(result.capture?.rows, [['本文', '', ''], ['', '', '一度だけ\n二段落目'], ['', '次', '単独の表示テキストと続き']]);
   },
 ));
 
-test('document evaluator: each complete paragraph remains one row without truncation', () => withPage(
+test('document evaluator: long sections split between complete paragraphs without truncation', () => withPage(
   '<main id="long"><h1>長い章</h1><p>' + 'a'.repeat(6000) + '</p><p>' + 'b'.repeat(6000) + '</p><p>終わり</p></main>', () => {
     const candidate = describe('content:id:long');
-    assert.equal(candidate.rowCount, 3);
+    assert.equal(candidate.rowCount, 2);
     const result = capture(candidate);
     assert.equal(result.error, undefined);
-    assert.deepEqual(result.capture?.rows, [['長い章', 'a'.repeat(6000)], ['長い章', 'b'.repeat(6000)], ['長い章', '終わり']]);
+    assert.deepEqual(result.capture?.rows, [['長い章', 'a'.repeat(6000)], ['長い章', 'b'.repeat(6000) + '\n終わり']]);
     assert.ok(result.capture!.rows.every(row => row.every(cell => cell.length <= LIMITS.cellChars)));
   },
 ));
@@ -155,7 +147,7 @@ test('document evaluator: loaded offscreen paragraphs count, while collapsed det
   '<main id="visible"><h1>画面の内容</h1><p style="margin-top:10000px">読み込み済み</p><details><summary>説明</summary><p>do-not-capture-collapsed</p></details><div hidden><h2>do-not-capture-heading</h2><p>do-not-capture-hidden-parent</p></div></main>', () => {
     const result = capture(describe('content:id:visible'));
     assert.equal(result.error, undefined);
-    assert.deepEqual(result.capture?.rows, [['画面の内容', '読み込み済み'], ['画面の内容', '説明']]);
+    assert.deepEqual(result.capture?.rows, [['画面の内容', '読み込み済み\n説明']]);
     assert.ok(!JSON.stringify(result.capture).includes('do-not-capture'));
   },
 ));
@@ -165,7 +157,7 @@ test('document evaluator: graphics and frames are disclosed, SVG text is retaine
     const candidate = describe('content:id:chart');
     const result = capture(candidate);
     assert.equal(result.error, undefined);
-    assert.deepEqual(result.capture?.rows, [['グラフ', 'eFTP: 250 W'], ['グラフ', '250 W'], ['グラフ', '説明']]);
+    assert.deepEqual(result.capture?.rows, [['グラフ', 'eFTP: 250 W\n250 W\n説明']]);
     assert.ok(result.capture?.warnings?.some(value => /グラフ|図形|画像|Canvas|canvas|SVG/.test(value)), 'omitted graphical content must be disclosed');
     assert.ok(result.capture?.warnings?.some(value => /frame|iframe|フレーム/.test(value)), 'frame boundaries must be disclosed');
     assert.ok(!JSON.stringify(result.capture).includes('do-not-capture'));
@@ -217,7 +209,7 @@ test('document evaluator: foreign key/signature/URL/headers and malformed DOM pa
     { tableKey: 'content:id:other' }, { contentSignature: 'foreign-signature' },
     { expectedUrl: 'https://fixture.example/other' }, { headers: ['別タイトル', '内容'] },
     { tableKey: 'content:dom:html[1]/body[1]/main[1],#other' },
-    { sourceIndexes: [0, 0] }, { sourceIndexes: [2] },
+    { sourceIndexes: [0, 0] }, { sourceIndexes: [4] },
   ] satisfies Partial<InspectRequest>[]) {
     const result = capture(candidate, overrides);
     assert.ok(result.error, 'selection provenance and syntax must be rechecked');
@@ -252,7 +244,7 @@ test('document evaluator: a content selection without a unique id has a parsed D
     const candidate = describe('content:dom:html[1]/body[2]/main[1]/section[1]');
     const result = capture(candidate);
     assert.equal(result.error, undefined);
-    assert.deepEqual(result.capture?.rows, [['カード', '表示本文']]);
+    assert.deepEqual(result.capture?.rows, [['', 'カード', '表示本文']]);
   },
 ));
 
@@ -293,7 +285,7 @@ test('document evaluator: heading-bearing inline wrappers preserve their inner s
   '<main id="guide"><h1>ガイド</h1><span><h2>章</h2><p>内側の本文</p></span></main>', () => {
     const result = capture(describe('content:id:guide'));
     assert.equal(result.error, undefined);
-    assert.deepEqual(result.capture?.rows, [['ガイド / 章', '内側の本文']]);
+    assert.deepEqual(result.capture?.rows, [['ガイド', '', ''], ['ガイド', '章', '内側の本文']]);
   },
 ));
 
@@ -301,7 +293,7 @@ test('document evaluator: visible descendants can override a hidden ancestor vis
   '<main id="guide"><h1>ガイド</h1><div style="visibility:hidden"><p>do-not-capture-hidden</p><section style="visibility:visible"><h2>見える章</h2><p>表示本文</p></section></div></main>', () => {
     const result = capture(describe('content:id:guide'));
     assert.equal(result.error, undefined);
-    assert.deepEqual(result.capture?.rows, [['ガイド / 見える章', '表示本文']]);
+    assert.deepEqual(result.capture?.rows, [['ガイド', '', ''], ['ガイド', '見える章', '表示本文']]);
   },
 ));
 

@@ -68,13 +68,19 @@ export function inspectPage(request: InspectRequest): InspectResult {
     return pieces.join('');
   }
 
+  const siblingPositions = new WeakMap<Element, number>();
+  const indexedParents = new WeakSet<Element>();
   function tableKey(table: Element): string {
     const id = table.getAttribute('id');
     if (id && id.length <= 197 && Array.from(document.querySelectorAll('[id]')).filter(element => element.getAttribute('id') === id).length === 1) return `id:${id}`;
     const path: string[] = [];
     for (let element: Element | null = table; element; element = element.parentElement) {
-      const siblings = element.parentElement?.children;
-      const position = siblings ? Array.from(siblings).indexOf(element) + 1 : 1;
+      const parent: Element | null = element.parentElement;
+      if (parent && !indexedParents.has(parent)) {
+        Array.from(parent.children).forEach((child, index) => siblingPositions.set(child, index + 1));
+        indexedParents.add(parent);
+      }
+      const position = parent ? siblingPositions.get(element) ?? 1 : 1;
       path.push(`${element.tagName.toLowerCase()}[${position}]`);
     }
     return `dom:${path.reverse().join('/')}`;
@@ -212,12 +218,55 @@ export function inspectPage(request: InspectRequest): InspectResult {
     type Block = { kind: 'prose' | 'table' | 'records'; key: string; headers: string[]; rows: string[][]; shape?: number[][] };
     const blocks: Block[] = [];
     const warnings = new Set<string>();
-    const headings: { level: number; text: string }[] = [];
+    type Heading = { level: number; text: string };
+    type Event = { type: 'heading'; heading: Heading }
+      | { type: 'fragment'; text: string }
+      | { type: 'enter' | 'exit'; tag: string; key: string; independent: boolean }
+      | { type: 'matrix'; block: Block; definition?: boolean };
+    const events: Event[] = [];
+    const headings: Heading[] = [];
     const headingEvents: [number, string][] = [];
     let sectionHasText = false;
     let accumulatedRows = 0;
     let accumulatedChars = 0;
     let compositeRows = false;
+    let rawChars = 0;
+    let hasMatrix = false;
+    let documentCandidate = false;
+    let legacyActive = false;
+
+    // Light-DOM helpers without a slot are not rendered. Native text geometry
+    // also covers closed shadow roots, whose internals are intentionally opaque.
+    function documentElement(element: Element): boolean {
+      if (!structurallyShown(element)) return false;
+      for (let child: Element | null = element; child; child = child.parentElement) {
+        if (child.getAttribute('aria-hidden') === 'true') return false;
+        const parent: Element | null = child.parentElement;
+        if (parent?.shadowRoot && !child.assignedSlot) return false;
+      }
+      return true;
+    }
+
+    function documentText(node: Node): boolean {
+      if (!node.parentElement || !documentElement(node.parentElement) || !shown(node.parentElement)) return false;
+      const range = document.createRange();
+      if (typeof range.getClientRects !== 'function') return true;
+      range.selectNodeContents(node);
+      // No viewport intersection: loaded offscreen text is part of the range.
+      return Array.from(range.getClientRects()).some(rect => rect.width > 0 || rect.height > 0);
+    }
+
+    function renderedContents(element: Element): boolean {
+      if (!documentElement(element)) return false;
+      const range = document.createRange();
+      if (typeof range.getClientRects !== 'function') return true;
+      range.selectNodeContents(element);
+      return [...Array.from(element.getClientRects()), ...Array.from(range.getClientRects())].some(rect => rect.width > 0 || rect.height > 0);
+    }
+
+    function visibleStructure(element: Element): boolean {
+      return shown(element) && renderedContents(element);
+    }
 
     function svgTexts(element: Element): Element[] {
       return Array.from(element.querySelectorAll('text')).filter(text => !text.closest('defs, symbol, clipPath, mask, pattern') && shown(text));
@@ -226,11 +275,12 @@ export function inspectPage(request: InspectRequest): InspectResult {
     const excluded = new Set(['script', 'style', 'template', 'noscript']);
     const formControls = new Set(['input', 'select', 'textarea']);
     const formWarning = '選択範囲に入力欄があります。input・select・textareaの値は取り込まず、表示ラベルだけを取り込みます。';
-    function rendered(nodes: Node[], preserve = false): string {
+    function rendered(nodes: Node[], preserve = false, documentVisibility = true): string {
       const pieces: string[] = [];
       const boundary = () => { if (pieces.length && !pieces[pieces.length - 1].endsWith('\n')) pieces.push('\n'); };
       function visit(node: Node, topLevel = false): void {
         if (node.nodeType === 3) {
+          if (documentVisibility && !documentText(node)) return;
           if (node.parentElement && !shown(node.parentElement)) return;
           pieces.push(preserve ? node.nodeValue ?? '' : (node.nodeValue ?? '').replace(/[ \t\r\n\f]+/g, ' '));
           return;
@@ -238,7 +288,7 @@ export function inspectPage(request: InspectRequest): InspectResult {
         if (node.nodeType !== 1) return;
         const element = node as Element;
         const tag = element.tagName.toLowerCase();
-        if (!structurallyShown(element) || excluded.has(tag)) return;
+        if (!(documentVisibility ? documentElement(element) : structurallyShown(element)) || excluded.has(tag)) return;
         if (formControls.has(tag)) { if (shown(element)) warnings.add(formWarning); return; }
         if (!shown(element)) { for (const child of Array.from(element.childNodes)) visit(child); return; }
         if (tag === 'br') { pieces.push('\n'); return; }
@@ -267,6 +317,27 @@ export function inspectPage(request: InspectRequest): InspectResult {
       return preserve ? joined : joined.replace(/ *\n */g, '\n').replace(/^[ \t\r\n\f]+|[ \t\r\n\f]+$/g, '');
     }
 
+    // Scan headings before applying paragraph row limits: the first heading can
+    // occur after thousands of introductory paragraphs.
+    const headingTexts = new Map<Element, string>();
+    for (const element of [root, ...Array.from(root.querySelectorAll('h1,h2,h3,h4,h5,h6'))]) {
+      if (!/^H[1-6]$/.test(element.tagName) || !shown(element) || !documentElement(element)) continue;
+      const text = rendered([element], false, true);
+      if (text) headingTexts.set(element, text);
+    }
+    documentCandidate = headingTexts.size > 0;
+    const declaredGrid = [root, ...Array.from(root.querySelectorAll('table,tr,[role="table"],[role="grid"],[role="treegrid"],[role="row"]'))]
+      .some(element => element.matches('table,tr,[role="table"],[role="grid"],[role="treegrid"],[role="row"]') && visibleStructure(element));
+    legacyActive = !documentCandidate || declaredGrid;
+    // Table and card text retain their existing display/whitespace contract.
+    if (declaredGrid) documentCandidate = false;
+
+    function countRaw(text: string): void {
+      if (text.length > fixedLimits.cellChars) stop('1つの段落・コード・セルの文字数が安全上限（10,000文字）を超えています。範囲を狭めて選び直してください。');
+      rawChars += text.length;
+      if (rawChars > fixedLimits.textChars) stop('取得文字数が安全上限（2,000,000文字）を超えています。取得を止めました。');
+    }
+
     function countRow(row: string[]): void {
       accumulatedRows++;
       if (accumulatedRows > fixedLimits.rows) stop('データ行数が安全上限（5,000行）を超えています。取得を止めました。');
@@ -287,8 +358,6 @@ export function inspectPage(request: InspectRequest): InspectResult {
       blocks.push(block);
     }
 
-    function addRow(block: Block, row: string[]): void { countRow(row); block.rows.push(row); }
-
     function writeRow(title: string, text: string): void {
       if (title.length > fixedLimits.cellChars) stop('タイトルの文字数が安全上限（10,000文字）を超えています。取得を止めました。');
       let block = blocks[blocks.length - 1];
@@ -296,47 +365,103 @@ export function inspectPage(request: InspectRequest): InspectResult {
         block = { kind: 'prose', key: tableKey(root), headers: ['タイトル', '内容'], rows: [] };
         addBlock(block);
       }
-      addRow(block, [title, text]);
+      countRow([title, text]);
+      block.rows.push([title, text]);
     }
 
-    function flush(): void {
+    function flushLegacy(): void {
       if (headings.length && !sectionHasText) {
         writeRow(headings.map(heading => heading.text).join(' / '), '');
         sectionHasText = true;
       }
     }
 
+    function projectLegacy(event: Event): void {
+      if (event.type === 'heading') {
+        const { level, text } = event.heading;
+        if (!sectionHasText && headings.length && level <= headings[headings.length - 1].level) flushLegacy();
+        while (headings.length && headings[headings.length - 1].level >= level) headings.pop();
+        headings.push(event.heading);
+        sectionHasText = false;
+      } else if (event.type === 'fragment') {
+        writeRow(headings.length ? headings.map(heading => heading.text).join(' / ') : '選択範囲', event.text);
+        sectionHasText = true;
+      } else if (event.type === 'matrix') {
+        flushLegacy();
+        addBlock(event.block);
+        for (const row of event.block.rows) countRow(row);
+        sectionHasText = true;
+      }
+    }
+
+    function emit(event: Event): void {
+      events.push(event);
+      if (legacyActive) projectLegacy(event);
+    }
+
     function append(text: string): void {
       if (!text || !text.trim()) return;
-      if (text.length > fixedLimits.cellChars) stop('1つの段落・コードの文字数が安全上限（10,000文字）を超えています。範囲を狭めて選び直してください。');
-      writeRow(headings.length ? headings.map(heading => heading.text).join(' / ') : '選択範囲', text);
-      sectionHasText = true;
+      countRaw(text);
+      emit({ type: 'fragment', text });
+    }
+
+    function startMatrix(block: Block, definition = false): void {
+      if (block.headers.length > fixedLimits.columns) stop('列数が安全上限（50列）を超えています。取得を止めました。');
+      if (!definition || !documentCandidate || hasMatrix) block.headers.forEach(countRaw);
+      if (!definition) {
+        hasMatrix = true;
+        if (!legacyActive) {
+          legacyActive = true;
+          events.forEach(projectLegacy);
+        }
+      }
+      emit({ type: 'matrix', block, ...(definition ? { definition: true } : {}) });
+    }
+
+    function matrixRow(block: Block, row: string[]): void {
+      row.forEach(countRaw);
+      if (legacyActive) countRow(row);
+      block.rows.push(row);
     }
 
     function addGrid(element: Element): void {
       const grid = tableGrid(element, cell => rendered([cell]), shown);
       const caption = Array.from(element.children).find(child => child.tagName.toLowerCase() === 'caption' && shown(child));
       if (caption) append(rendered([caption]));
-      flush();
       if (grid.mergedData) warnings.add('結合セルは左上の値を取り込み、続きのセルは空欄にしています。値を反復していません。');
       const block: Block = { kind: 'table', key: tableKey(element), headers: grid.headers, rows: [], shape: grid.headerShape };
-      addBlock(block);
-      for (const row of grid.rows) addRow(block, row.map(cell => cell ? rendered([cell]) : ''));
-      sectionHasText = true;
+      startMatrix(block);
+      for (const row of grid.rows) matrixRow(block, row.map(cell => cell ? rendered([cell]) : ''));
     }
 
     function definition(element: Element, labelsOnly = false): Map<string, string> | null {
+      if (Array.from(element.querySelectorAll('h1,h2,h3,h4,h5,h6,pre,table,tr,[role="table"],[role="grid"],[role="treegrid"],[role="row"]')).some(visibleStructure)) return null;
       const values = new Map<string, string>();
       let key = '';
+      let localChars = 0;
+      const budget = (text: string) => {
+        if (text.length > fixedLimits.cellChars) stop('1つの段落・コード・セルの文字数が安全上限（10,000文字）を超えています。範囲を狭めて選び直してください。');
+        localChars += text.length;
+        if (rawChars + localChars > fixedLimits.textChars) stop('取得文字数が安全上限（2,000,000文字）を超えています。取得を止めました。');
+      };
       for (const child of Array.from(element.children)) {
-        if (!shown(child)) continue;
+        if (!documentElement(child) || !shown(child)) continue;
         const tag = child.tagName.toLowerCase();
         if (tag === 'dt') {
           key = rendered([child]);
           if (!key || values.has(key)) return null;
+          if (!labelsOnly) budget(key);
           values.set(key, '');
-          if (values.size > fixedLimits.rows) stop('データ行数が安全上限（5,000行）を超えています。取得を止めました。');
-        } else if (tag === 'dd' && key) { if (!labelsOnly) values.set(key, [values.get(key), rendered([child])].filter(Boolean).join('\n')); }
+          if ((!documentCandidate || hasMatrix) && values.size > fixedLimits.rows) stop('データ行数が安全上限（5,000行）を超えています。取得を止めました。');
+        } else if (tag === 'dd' && key) {
+          if (!labelsOnly) {
+            const text = rendered([child]);
+            budget(text);
+            const joined = [values.get(key), text].filter(Boolean).join('\n');
+            if (joined.length > fixedLimits.cellChars) stop('1つの段落・コード・セルの文字数が安全上限（10,000文字）を超えています。範囲を狭めて選び直してください。');
+            values.set(key, joined);
+          }
+        }
         else return null;
       }
       return values.size ? values : null;
@@ -345,52 +470,57 @@ export function inspectPage(request: InspectRequest): InspectResult {
     function repeated(element: Element, selected?: Element[]): boolean {
       // Direct text belongs to the surrounding prose. Only complete sibling runs may form records.
       if (!selected && Array.from(element.childNodes).some(node => node.nodeType === 3)) return false;
-      const children = (selected ?? Array.from(element.children)).filter(shown);
+      const children = (selected ?? Array.from(element.children)).filter(visibleStructure);
       if (children.length < 2 || !children.every(child => child.tagName === children[0].tagName)) return false;
       const definitions = children.map(child => child.tagName.toLowerCase() === 'dl' ? child : child.querySelector('dl'));
       if (definitions.every((dl): dl is Element => Boolean(dl))) {
-        if (children.length + accumulatedRows + (blocks.length ? 1 : 0) > fixedLimits.rows) stop('データ行数が安全上限（5,000行）を超えています。取得を止めました。');
+        const direct = children.every((child, index) => child === definitions[index]);
+        if (!direct && children.length + accumulatedRows + (blocks.length ? 1 : 0) > fixedLimits.rows) stop('データ行数が安全上限（5,000行）を超えています。取得を止めました。');
         if (children.some((child, index) => child !== definitions[index] && rendered(Array.from(child.childNodes).filter(node => node !== definitions[index])).trim())) return false;
         const records = definitions.map(dl => definition(dl, true));
         if (records.every((record): record is Map<string, string> => Boolean(record))) {
+          if (direct
+            && records.some(record => record.size !== records[0].size || [...record.keys()].some(key => !records[0].has(key)))) return false;
+          if (direct && children.length + accumulatedRows + (blocks.length ? 1 : 0) > fixedLimits.rows) stop('データ行数が安全上限（5,000行）を超えています。取得を止めました。');
           const headers = [...new Set(records.flatMap(record => [...record.keys()]))];
-          flush();
           const block: Block = { kind: 'records', key: tableKey(element), headers, rows: [] };
-          addBlock(block);
+          startMatrix(block);
           for (const dl of definitions) {
             const record = definition(dl)!;
-            addRow(block, headers.map(header => record.get(header) ?? ''));
+            matrixRow(block, headers.map(header => record.get(header) ?? ''));
           }
-          sectionHasText = true;
           return true;
         }
       }
-      if (children.some(child => child.querySelector('h1,h2,h3,h4,h5,h6,table,dl,[role="table"],[role="grid"]') || rendered(Array.from(child.childNodes).filter(node => node.nodeType === 3)).trim())) return false;
-      const cells = children.map(child => Array.from(child.children).filter(shown));
+      // Paragraph/list formatting and navigation positions are prose. Exact
+      // labelled cards above retain their schema even inside these boundaries.
+      if (documentCandidate && (['P', 'LI'].includes(children[0].tagName) || element.closest('nav,header,footer,aside'))) return false;
+      const declared = 'h1,h2,h3,h4,h5,h6,pre,table,tr,dl,[role="table"],[role="grid"],[role="treegrid"],[role="row"]';
+      if (children.some(child => child.matches(declared) || Array.from(child.querySelectorAll(declared)).some(visibleStructure) || rendered(Array.from(child.childNodes).filter(node => node.nodeType === 3)).trim())) return false;
+      const cells = children.map(child => Array.from(child.children).filter(visibleStructure));
       if (cells[0].length < 2 || cells.some(row => row.length !== cells[0].length || row.some((cell, index) => cell.tagName !== cells[0][index].tagName))) return false;
-      flush();
       const block: Block = { kind: 'records', key: tableKey(element), headers: cells[0].map((_, index) => `列${index + 1}`), rows: [] };
-      addBlock(block);
-      for (const row of cells) addRow(block, row.map(cell => rendered([cell])));
+      startMatrix(block);
+      for (const row of cells) matrixRow(block, row.map(cell => rendered([cell])));
       warnings.add('繰り返し部品の位置から列を作りました。列名の意味は推定していません。');
-      sectionHasText = true;
       return true;
     }
 
     const containers = new Set(['html', 'body', 'main', 'article', 'section', 'div', 'header', 'footer', 'nav', 'aside', 'form', 'ul', 'ol', 'dl', 'li', 'dd', 'details', 'summary', 'figure', 'figcaption', 'blockquote']);
     const special = new Set(['p', 'pre', 'dt', 'table', 'svg', 'canvas', 'img', 'iframe', 'frame', 'video', 'audio', 'object', 'embed']);
     const headingSelector = 'h1,h2,h3,h4,h5,h6';
-    const structuralSelector = `${headingSelector},table,tr,dl,[role="table"],[role="grid"],[role="treegrid"],[role="row"]`;
+    const structuralSelector = `${headingSelector},pre,table,tr,dl,[role="table"],[role="grid"],[role="treegrid"],[role="row"]`;
     function walkContainer(element: Element): void {
       let inline: Node[] = [];
       const flushInline = () => { append(rendered(inline)); inline = []; };
       const nodes = Array.from(element.childNodes);
+      let rejectedRunEnd = -1;
       for (let position = 0; position < nodes.length; position++) {
         const node = nodes[position];
         if (node.nodeType === 1) {
           const child = node as Element;
           const tag = child.tagName.toLowerCase();
-          if (['div', 'section', 'article', 'li', 'dl'].includes(tag)) {
+          if (position > rejectedRunEnd && ['div', 'section', 'article', 'li', 'dl'].includes(tag)) {
             const run = [child];
             let last = position;
             for (let next = position + 1; next < nodes.length; next++) {
@@ -403,6 +533,9 @@ export function inspectPage(request: InspectRequest): InspectResult {
             if (run.length > 1) {
               flushInline();
               if (repeated(element, run)) { position = last; continue; }
+              // A rejected run is still visited element by element, but does
+              // not repeatedly rescan every shorter suffix of a long document.
+              rejectedRunEnd = last;
             }
           }
           const display = styleOf(child).display;
@@ -417,25 +550,33 @@ export function inspectPage(request: InspectRequest): InspectResult {
       flushInline();
     }
 
+    const independent = new Set(['article', 'main', 'nav', 'header', 'footer', 'aside']);
     function walk(element: Element): void {
-      if (!structurallyShown(element)) return;
+      if (!renderedContents(element)) return;
+      const tag = element.tagName.toLowerCase();
+      const boundary = independent.has(tag) || tag === 'section';
+      if (boundary) emit({ type: 'enter', tag, key: tableKey(element), independent: independent.has(tag) });
+      walkElement(element);
+      if (boundary) emit({ type: 'exit', tag, key: tableKey(element), independent: independent.has(tag) });
+    }
+
+    function walkElement(element: Element): void {
       const tag = element.tagName.toLowerCase();
       if (excluded.has(tag)) return;
       if (formControls.has(tag)) { if (shown(element)) warnings.add(formWarning); return; }
       if (!shown(element)) { walkContainer(element); return; }
       if (/^h[1-6]$/.test(tag)) {
-        const text = rendered([element]);
+        const text = headingTexts.get(element) ?? rendered([element]);
         if (!text) return;
         if (text.length > fixedLimits.cellChars) stop('見出しの文字数が安全上限（10,000文字）を超えています。');
         const level = Number(tag[1]);
-        if (!sectionHasText && headings.length && level <= headings[headings.length - 1].level) flush();
-        while (headings.length && headings[headings.length - 1].level >= level) headings.pop();
-        headings.push({ level, text });
+        countRaw(text);
         headingEvents.push([level, text]);
-        sectionHasText = false;
+        emit({ type: 'heading', heading: { level, text } });
         return;
       }
       if (tag === 'table' || tag === 'tr' || ['table', 'grid', 'treegrid', 'row'].includes(element.getAttribute('role') ?? '')) {
+        if (!visibleStructure(element)) return;
         if (tag === 'table' && element.querySelector('table')) {
           warnings.add('入れ子の外側の列配置は確定せず、セルごとの文字と内側の表を順番に取り込みます。');
           for (const caption of Array.from(element.children).filter(child => child.tagName.toLowerCase() === 'caption' && shown(child))) append(rendered([caption]));
@@ -452,16 +593,14 @@ export function inspectPage(request: InspectRequest): InspectResult {
         return;
       }
       if (tag === 'pre') { append(rendered([element], true)); return; }
-      if (tag === 'p' && element.querySelector(structuralSelector)) { walkContainer(element); return; }
+      if ((tag === 'p' || tag === 'dt') && element.querySelector(structuralSelector)) { walkContainer(element); return; }
       if (special.has(tag)) { append(rendered([element])); return; }
       if (tag === 'dl') {
         const values = definition(element);
         if (values) {
-          flush();
           const block: Block = { kind: 'records', key: tableKey(element), headers: ['項目', '内容'], rows: [] };
-          addBlock(block);
-          for (const row of values) addRow(block, row);
-          sectionHasText = true;
+          startMatrix(block, true);
+          for (const row of values) matrixRow(block, row);
           return;
         }
       }
@@ -472,23 +611,87 @@ export function inspectPage(request: InspectRequest): InspectResult {
 
     if (!structurallyShown(root)) stop('選択範囲が非表示になりました。表示されている範囲を選び直してください。');
     walk(root);
-    flush();
-    if (!blocks.length) stop('選択範囲には取得できる表示文字がありません。画像や図形だけの場合は文字のある範囲も選んでください。');
-    const composite = blocks.length > 1;
-    const width = blocks.reduce((maximum, block) => Math.max(maximum, block.headers.length), 0);
-    if (width > fixedLimits.columns) stop('列数が安全上限（50列）を超えています。取得を止めました。');
-    const headers = composite ? Array.from({ length: width }, (_, index) => `列${index + 1}`) : blocks[0].headers;
-    const rows = blocks.flatMap(block => composite && block.kind !== 'prose' ? [block.headers, ...block.rows] : block.rows).map(row => [...row, ...Array(width - row.length).fill('')]);
-    if (rows.length > fixedLimits.rows) stop('データ行数が安全上限（5,000行）を超えています。取得を止めました。');
-    let total = 0;
-    for (const row of [headers, ...rows]) for (const cell of row) {
-      if (cell.length > fixedLimits.cellChars) stop('1つの段落・コード・セルの文字数が安全上限（10,000文字）を超えています。範囲を狭めて選び直してください。');
-      total += cell.length;
-      if (total > fixedLimits.textChars) stop('取得文字数が安全上限（2,000,000文字）を超えています。取得を止めました。');
+    const hierarchy = documentCandidate && !hasMatrix;
+    let headers: string[];
+    let rows: string[][];
+    let composite = false;
+    if (hierarchy) {
+      const maximum = headingEvents.reduce((level, heading) => Math.max(level, heading[0]), 0);
+      headers = [...Array.from({ length: maximum }, (_, index) => `H${index + 1}`), '内容'];
+      rows = [];
+      let total = headers.reduce((sum, cell) => sum + cell.length, 0);
+      let stack: Heading[] = [];
+      const saved: Heading[][] = [];
+      let pending = false;
+      let fragments: string[] = [];
+      let length = 0;
+      const flushSection = () => {
+        if (!pending && !fragments.length) return;
+        const row = Array.from({ length: maximum }, (_, index) => stack.find(heading => heading.level === index + 1)?.text ?? '');
+        row.push(fragments.join('\n'));
+        if (rows.length >= fixedLimits.rows) stop('データ行数が安全上限（5,000行）を超えています。取得を止めました。');
+        for (const cell of row) {
+          if (cell.length > fixedLimits.cellChars) stop('1つの段落・コード・セルの文字数が安全上限（10,000文字）を超えています。範囲を狭めて選び直してください。');
+          total += cell.length;
+          if (total > fixedLimits.textChars) stop('取得文字数が安全上限（2,000,000文字）を超えています。取得を止めました。');
+        }
+        rows.push(row);
+        fragments = [];
+        length = 0;
+        pending = false;
+      };
+      const fragment = (text: string) => {
+        if (!text || !text.trim()) return;
+        if (text.length > fixedLimits.cellChars) stop('1つの段落・コード・セルの文字数が安全上限（10,000文字）を超えています。範囲を狭めて選び直してください。');
+        if (length + (fragments.length ? 1 : 0) + text.length > fixedLimits.cellChars) {
+          flushSection();
+          warnings.add('1つの節の本文が10,000文字を超えるため、段落の境界で同じ見出しの続きの行へ分けました。');
+        }
+        length += (fragments.length ? 1 : 0) + text.length;
+        fragments.push(text);
+      };
+      for (const event of events) {
+        if (event.type === 'heading') {
+          flushSection();
+          while (stack.length && stack[stack.length - 1].level >= event.heading.level) stack.pop();
+          stack.push(event.heading);
+          pending = true;
+        } else if (event.type === 'fragment') fragment(event.text);
+        else if (event.type === 'enter') {
+          flushSection();
+          saved.push(stack);
+          stack = event.independent ? [] : [...stack];
+        } else if (event.type === 'exit') {
+          flushSection();
+          stack = saved.pop() ?? [];
+        } else if (event.type === 'matrix') {
+          for (const [term, description] of event.block.rows) fragment(`${term}：${description}`);
+        }
+      }
+      flushSection();
+    } else {
+      if (!legacyActive) events.forEach(projectLegacy);
+      flushLegacy();
+      composite = blocks.length > 1;
+      const width = blocks.reduce((maximum, block) => Math.max(maximum, block.headers.length), 0);
+      if (width > fixedLimits.columns) stop('列数が安全上限（50列）を超えています。取得を止めました。');
+      headers = composite ? Array.from({ length: width }, (_, index) => `列${index + 1}`) : blocks[0]?.headers ?? [];
+      rows = blocks.flatMap(block => composite && block.kind !== 'prose' ? [block.headers, ...block.rows] : block.rows).map(row => [...row, ...Array(width - row.length).fill('')]);
+      if (rows.length > fixedLimits.rows) stop('データ行数が安全上限（5,000行）を超えています。取得を止めました。');
+      let total = 0;
+      for (const row of [headers, ...rows]) for (const cell of row) {
+        if (cell.length > fixedLimits.cellChars) stop('1つの段落・コード・セルの文字数が安全上限（10,000文字）を超えています。範囲を狭めて選び直してください。');
+        total += cell.length;
+        if (total > fixedLimits.textChars) stop('取得文字数が安全上限（2,000,000文字）を超えています。取得を止めました。');
+      }
     }
+    if (!headers.length || !rows.length && hierarchy) stop('選択範囲には取得できる表示文字がありません。画像や図形だけの場合は文字のある範囲も選んでください。');
     // A small structural fingerprint catches changed headings while allowing refreshed values.
     let hash = 2166136261;
-    for (const char of JSON.stringify([headingEvents, blocks.map(block => [block.kind, block.key, block.headers, block.shape ?? []])])) hash = Math.imul(hash ^ char.codePointAt(0)!, 16777619);
+    const structure = events.map(event => event.type === 'heading' ? ['heading', event.heading.level, event.heading.text]
+      : event.type === 'matrix' ? [event.definition ? 'definition' : event.block.kind, event.block.key, event.block.headers, event.block.shape ?? []]
+      : event.type === 'fragment' ? ['fragment'] : [event.type, event.tag, event.key, event.independent]);
+    for (const char of JSON.stringify([hierarchy ? 'hierarchy-v1' : 'matrix-v1', structure])) hash = Math.imul(hash ^ char.codePointAt(0)!, 16777619);
     const contentSignature = `structure:${(hash >>> 0).toString(16)}`;
     return { headers, rows, warnings: [...warnings], contentSignature, label: (headingEvents[0]?.[1] || '選択した範囲').slice(0, 100), ...(composite ? { layout: 'composite' as const } : {}) };
   }
