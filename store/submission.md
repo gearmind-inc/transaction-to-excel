@@ -9,10 +9,11 @@
 | 提供者 | GearMind Inc. |
 | 登記上の法人名を求められた場合 | 株式会社GearMind |
 | 製品ホームページ | https://github.com/gearmind-inc/transaction-to-excel |
-| プライバシーポリシー | 未確定。リポジトリを公開に切り替えた後に決まる (見込み: https://github.com/gearmind-inc/transaction-to-excel/blob/main/PRIVACY.md) |
+| サポート | https://github.com/gearmind-inc/transaction-to-excel/issues |
+| プライバシーポリシー | https://github.com/gearmind-inc/transaction-to-excel/blob/main/PRIVACY.md |
 | お問い合わせ | dev@gearmind.cc |
 
-リポジトリは非公開のため、今は上の URL を外から開けません。公開に切り替えた後、ログアウト状態で開けることを確かめてから登録します。
+2026-10-21に上のURLを申請画面へ登録・保存しました。リポジトリ公開後、3つとも認証情報なしでHTTP 200を確認し、公開中のプライバシーポリシー本文が配布物と一致することを確認しました。掲載情報とプライバシーを再保存し、URLの提出エラー3件が解消され、「審査のため送信」ボタンが有効であることを確認済みです。審査への送信はまだ行っていません。
 
 ## 単一の目的 / Single purpose
 
@@ -28,7 +29,7 @@ Turn a table or text selected on a web page into a table, let the user review an
 |---|---|---|
 | `activeTab` | ツールバーのボタンを押したタブに限り、一時的にアクセスするためです。そのタブの URL を読んで HTTP/HTTPS のページか確かめ、`scripting` で範囲を選ぶ・読む処理を実行します。 | `src/workspace.ts` の `scan` (`chrome.tabs.get`) と `inject` / `pick` |
 | `scripting` | 利用者がボタンを押したタブの最上位の文書で、同梱の関数を実行するためです。表の候補の見出しと件数を読む、ページ上で範囲を選ぶ、選んだ範囲を強調表示する、選んだ範囲の表示されている文字を読む、の 4 つに使います。 | `src/workspace.ts` の `inject` / `pick` / `stopPicker` (`chrome.scripting.executeScript`)。実行する関数は `src/extraction.ts` の `inspectPage` と `src/picker.ts` の `pickRegion` / `cancelRegion` |
-| `storage` | ウィンドウごとのツールバー操作の記録 (タブ ID とランダムな ID) を `chrome.storage.session` に、最後に始めた保存の試行の記録 (出力 ID、SHA-256 ダイジェスト、日時、ダウンロード ID、状態、理由コード) を `chrome.storage.local` に置くためです。 | `src/background.ts` (`chrome.storage.session.set`)、`src/panel-source.ts` の `watchPanelSource`、`src/chrome-ports.ts` の `chromeSavePort` |
+| `storage` | ウィンドウごとのツールバー操作の記録 (タブ ID とランダムな ID) を `chrome.storage.session` に、最後に始めた保存の試行の記録 (出力 ID、SHA-256 ダイジェスト、日時、ダウンロード ID、状態、理由コード) を `chrome.storage.local` に置くためです。URL、ページの文字、取り込んだ行は置きません。 | `src/background.ts` (`chrome.storage.session.set`)、`src/panel-source.ts` の `watchPanelSource`、`src/chrome-ports.ts` の `chromeSavePort` |
 | `downloads` | 利用者が確認した CSV を、Chrome の保存画面で選んだ場所へ保存し、その保存の結果 (完了・取消・中断) を記録したダウンロード ID だけで照会するためです。保存中の取消の要求にも使います。 | `src/chrome-ports.ts` の `chromeSavePort` (`download` / `search` / `cancel` / `onChanged`) |
 | `sidePanel` | ツールバーのボタンを押したときに、今のページの横に操作画面 (サイドパネル) を開くためです。 | `src/background.ts` (`chrome.sidePanel.open`)、manifest の `side_panel` |
 
@@ -36,7 +37,7 @@ Turn a table or text selected on a web page into a table, let the user review an
 
 - `activeTab`: Temporarily access only the tab where the user clicks the toolbar button. The extension reads that tab's URL to confirm it is an HTTP/HTTPS page and runs the range selection and reading through `scripting`.
 - `scripting`: Run bundled functions in the top-level document of the tab where the user clicked the button: read table candidates' headers and counts, let the user select a range on the page, highlight the selected range, and read the visible text of the selected range.
-- `storage`: Keep a per-window toolbar activation (tab ID and a random ID) in `chrome.storage.session`, and the record of the most recently started save attempt (export ID, SHA-256 digest, timestamp, download ID, state and reason code) in `chrome.storage.local`. A new save writes its record before the download begins, replacing the previous one.
+- `storage`: Keep a per-window toolbar activation (tab ID and a random ID) in `chrome.storage.session`, and the record of the most recently started save attempt (export ID, SHA-256 digest, timestamp, download ID, state and reason code) in `chrome.storage.local`. A new save writes its record before the download begins, replacing the previous one. Neither store receives the page URL, page text, or captured rows.
 - `downloads`: Save the CSV the user confirmed to the location chosen in Chrome's Save dialog, and check that save's result (complete, cancelled or interrupted) by its recorded download ID only. It is also used to request cancellation of an in-progress save.
 - `sidePanel`: Open the controls in the side panel beside the current page when the user clicks the toolbar button.
 
@@ -83,31 +84,41 @@ The extension does not load external scripts. The functions it runs in pages are
 
 ### 提出物
 
-- [ ] この準備の PR をマージした後の main で zip を作る。作業場所で試しに作った zip は使わない。コマンドの例: `git switch main && git pull && npm ci --ignore-scripts && npm run check && npm run package` (出力: `dist/transaction-to-excel-0.1.0.zip`)
-- [ ] zip の中身を `unzip -l dist/transaction-to-excel-0.1.0.zip` で確かめる。`manifest.json` がフォルダに入らず直下にあること、`background.js` `workspace.js` `worker.js` `workspace.html` `workspace.css` `icons/` `README.md` `PRIVACY.md` `LICENSE` があること、`src/` `tests/` `node_modules/`、ソースマップ、内部文書が入っていないこと
-- [ ] `store/screenshots/` の PNG を差し替え後の最新版で確かめる。1280x800 か 640x400、1〜5 枚、余白なし。Playwright で撮った本物の画面だけで、今の画面と一致し、個人情報・実在の URL・他の拡張機能が写っていないこと
-- [ ] アイコン (`icons/icon128.png`) と小さい宣伝画像 (`store/promo/small-440x280.png`) の大きさを確かめる
+- [x] コードの検査対象は `11dd3c83da2bf46c773ec7986cc612e4ae149acc`。READMEだけを更新したmain `b97a87a80780d2159693239786e8840e3c2a8522` から再ビルド・ZIP生成を完了。`dist/transaction-to-excel-0.1.0.zip` を2026-10-21に差し替え。SHA-256: `d5e4908ae3ce88e0765a780959a3936f87c3fe30ff91bc6ce11e00ff67157b09`。ストアから再取得したCRXのREADMEを含む11ファイルはZIPと一致し、manifestの元の項目も一致。
+- [x] zip の中身を `unzip -l dist/transaction-to-excel-0.1.0.zip` で確かめる。`manifest.json` がフォルダに入らず直下にあること、`background.js` `workspace.js` `worker.js` `workspace.html` `workspace.css` `icons/` `README.md` `PRIVACY.md` `LICENSE` があること、`src/` `tests/` `node_modules/`、ソースマップ、内部文書が入っていないこと
+- [x] `store/screenshots/` の PNG を差し替え後の最新版で確かめる。1280x800 か 640x400、1〜5 枚、余白なし。Playwright で撮った本物の画面だけで、今の画面と一致し、個人情報・実在の URL・他の拡張機能が写っていないこと
+- [x] アイコン (`icons/icon128.png`) と小さい宣伝画像 (`store/promo/small-440x280.png`) の大きさを確かめる
 
 ### 掲載情報と申告
 
-- [ ] 日本語の掲載本文と画像を登録する。短い説明は 132 文字以下で、manifest の `description` と一字一句同じにする。各欄の上限と掲載結果は実画面で確かめる
-- [ ] カテゴリと言語を実画面の選択肢で決める ([listing.md](listing.md) の案)
-- [ ] データ種別と Limited Use の宣誓欄を実画面で確かめ、PRIVACY.md と一致する申告を登録する
-- [ ] 保存データの保護が Chrome ウェブストアの要件を満たすか確かめる。[User Data FAQ](https://developer.chrome.com/docs/webstore/program-policies/user-data-faq) の暗号化の項 (2026-10-02 確認) は、必要な暗号の種類として「transmit user data over a secure connection (e.g. HTTPS, WSS) and stored at rest using a strong encryption method such as RSA or AES」と書いている。一方、すべてのデータを暗号化する必要があるかの問いには「a minimum requirement of encrypting transmissions of all user data」と答えている。この拡張機能は `chrome.storage.local` の記録 (保存の試行の記録、以前の版の設定) を独自に暗号化していないため、端末内に置くだけで適合すると判断せず、必要なら Chrome ウェブストアに問い合わせる。適合しない場合は、実装で対応した後に確かめ直す
+- [x] 日本語の掲載本文と画像を登録する。短い説明は 132 文字以下で、manifest の `description` と一字一句同じにする。各欄の上限と掲載結果は実画面で確かめる
+- [x] カテゴリと言語を実画面の選択肢で決める ([listing.md](listing.md) の案)
+- [x] データ種別と Limited Use の宣誓欄を実画面で確かめ、PRIVACY.md と一致する申告を登録する
+- [x] 保存方式・保存する項目・外部送信の有無を実装とプライバシーポリシーで照合した。取り込んだ表はメモリ内、利用者が明示保存するCSVはローカルファイル、拡張内の永続記録は保存結果を照合するための最小限の情報1件。保存方式は申告済み。確認範囲で修正を要する攻撃経路は発見されなかった。
+
+保存時暗号化の扱い: [User Data FAQ](https://developer.chrome.com/docs/webstore/program-policies/user-data-faq)の問9には保存時暗号化の記述がある。現実装は保存記録や利用者が出力するCSVを独自に暗号化しない。2026-10-21の技術レビューでは、拡張内に表本体を永続保存せず外部送信もしないこと、保存領域を信頼された拡張コンテキストに制限していること、保存方式を明記していることから、追加暗号化と事前問い合わせを申請準備の必須条件にはしないと判断した。これはGoogleの適合認定ではない。審査で具体的な指摘があれば、その対象と要件に沿って対応する。
 - [ ] 提供者・連絡先・取引者 (trader) の情報を登録し、公開される情報をプレビューで確かめる
+
+個人による事業利用もTraderの定義に含まれます。アカウントの名義と取引者区分を区別し、実際の利用目的に合う申告を確認してください。本人情報を伴うアカウント全体の申告は、この提出物更新では変更していません。区分の定義と確認手続きは[GoogleのTrader FAQ](https://developer.chrome.com/docs/webstore/program-policies/trader-verification-faq)を参照。
+
+配布設定は料金なし・一般公開・すべての地域。審査用の追加手順は2026-10-21に以下を保存し、読み戻しで一致を確認しました (453文字、認証情報不要)。
+
+> No login, payment or setup. Open https://www.w3.org/WAI/tutorials/tables/one-header/ and click the extension toolbar icon. Click "ページ上で範囲を選ぶ", then select the first table: Date / Event / Venue (3 data rows). Click a column heading to rename, move or exclude it; "元に戻す" undoes an edit. Check the confirmation box, then "確認したCSVを保存". Save to a local .csv file or cancel; cancelling keeps the table editable. All processing is local. Excel is not required.
 
 ### 公開の判断 (ユーザーの作業)
 
-- [ ] リポジトリを公開に切り替える
-- [ ] プライバシーポリシーの公開 URL を決め、ログアウト状態で開けることを確かめてから、申請画面と [listing.md](listing.md) に入れる
-- [ ] 公開を決めた時点で、README の公開保留の記述 (「Public release and universal site compatibility are not claimed.」と「public release remains on hold.」) を直す
-- [ ] タグを打つか決める (今はタグなし。manifest・package.json の version は 0.1.0)。GitHub Release に zip を付けるかも決める
+- [x] リポジトリを公開に切り替える (2026-10-21、本人が実施)
+- [x] プライバシーポリシーURLを決め、申請画面と [listing.md](listing.md) に登録する
+- [x] リポジトリ公開後、3つのURLを匿名で開き、申請画面を再保存して提出エラーの解消と送信ボタンの有効化を確認する (2026-10-21)
+- [x] READMEを開発者向けの概要・ビルド・検証方法に整理し、ローカルURLは任意の開発用サンプルと明示する。ストアの状態は準備中と記載する。ストア公開後に掲載先リンクと状態を更新する
+
+タグとGitHub Releaseは任意。Chrome Web Store申請の必須条件には含めない。manifest・package.jsonのversionは0.1.0。
 
 ### リリース前の未確認事項 (未確認のまま。確認が済むまでチェックしない)
 
-- [ ] Windows と macOS の通常の Chrome で、範囲選択・表の編集・CSV の保存と取消・失敗からの戻りを操作して確かめる (Windows の実機での確認は無く、今の版の通常の Chrome でも未確認)
+- [ ] Windows と macOS の通常の Chrome で、範囲選択・表の編集・CSV の保存と取消・失敗からの戻りを操作して確かめる (2026-10-21にmacOS 26.4.1 / Chrome 155.0.8059.80で選択・列編集・保存・取消・タブ変更後の表保持を確認。Windowsの通常UIは未確認)
 - [ ] Windows と macOS の Microsoft Excel で、列の型を指定して CSV を取り込み、先頭のゼロ・長い ID・日付・金額・件数・保護用のタブの扱いを確かめる (Excel での確認は無い)
-- [ ] 公開されているサイトで、通常の Chrome と出荷用の拡張機能を使い、取り込み・プレビュー・ネイティブの保存と取消を画面で確かめる
+- [x] 公開されているサイトで、通常の Chrome と出荷用の拡張機能を使い、取り込み・プレビュー・ネイティブの保存と取消を画面で確かめる (2026-10-21、上記MacとChrome、W3Cの公開サンプル。3行3列を保存し、全セルとCSVバイト列を固定期待値に照合して一致)
 - [ ] 本人の業務用サイトで、合意した CSV の列とデータを照合する
 - [ ] 確かめた OS・Chrome・Excel の版を記録し、掲載文などで示す対応範囲を確かめた環境だけに限る
 

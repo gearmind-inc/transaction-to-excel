@@ -8,7 +8,7 @@
 |---|---|
 | 名前 | `Webページ → CSV (無料ローカル版)` (manifest の `name` から表示されます) |
 | 言語 | 日本語 |
-| カテゴリ | 案: 仕事効率化 (Productivity) の中から、ツール系の区分を選ぶ。区分名は申請画面の選択肢で確定する |
+| カテゴリ | ツール |
 
 今の拡張機能は日本語だけで、`_locales` (多言語化のフォルダ) を持っていません。公式の [掲載情報のページ](https://developer.chrome.com/docs/webstore/cws-dashboard-listing) では、言語ごとの説明を登録できるのは拡張機能を多言語化した場合です。下の英語版は、多言語化したときに使う控えです。
 
@@ -36,7 +36,7 @@ Web ページ上で選んだ表や文章を、サイドパネルで表に整え�
 - 無料で、アカウント登録は不要です。拡張機能は外部へデータを送りません。サイトへのログインが必要な場合は、ご自身でログインしたページを使ってください。
 - すべてのサイトで取り込めることは保証していません。
 
-プライバシーポリシー: 公開リポジトリの PRIVACY.md (URL は公開に切り替えた後に決まります。[申請手順](submission.md) を参照)
+プライバシーポリシー: https://github.com/gearmind-inc/transaction-to-excel/blob/main/PRIVACY.md
 お問い合わせ: dev@gearmind.cc
 
 ## English
@@ -63,7 +63,7 @@ This extension turns a table or text you select on a web page into a table in th
 - Free, with no account registration. The extension does not send data externally. If a site requires login, sign in to that page yourself.
 - Capturing every website is not guaranteed.
 
-Privacy policy: PRIVACY.md in the public repository (the URL is set after the repository becomes public; see [submission.md](submission.md))
+Privacy policy: https://github.com/gearmind-inc/transaction-to-excel/blob/main/PRIVACY.md
 Contact: dev@gearmind.cc
 
 ## 画像
